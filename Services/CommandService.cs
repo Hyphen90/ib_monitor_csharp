@@ -128,10 +128,13 @@ namespace IBMonitor.Services
         private string SetSymbol(string symbol)
         {
             var oldSymbol = _config.Symbol;
-            _config.Symbol = symbol.ToUpperInvariant();
+            var newSymbol = symbol.ToUpperInvariant();
             
-            _logger.Information("Symbol changed from '{OldSymbol}' to '{NewSymbol}'", oldSymbol, _config.Symbol);
-            return $"Symbol set to '{_config.Symbol}' (was: '{oldSymbol}')";
+            // Update symbol and refresh market data subscription
+            _positionService.UpdateSymbol(newSymbol);
+            
+            _logger.Information("Symbol changed from '{OldSymbol}' to '{NewSymbol}'", oldSymbol, newSymbol);
+            return $"Symbol set to '{newSymbol}' (was: '{oldSymbol}')";
         }
 
         private string SetBreakEvenTrigger(string value)

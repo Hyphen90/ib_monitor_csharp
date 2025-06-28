@@ -25,6 +25,7 @@ namespace IBMonitor.Services
         public event Action<int, string, decimal, decimal, double, int, int, double, int, string, double>? OrderStatusUpdate;
         public event Action<int, Contract, Order, OrderState>? OpenOrderReceived;
         public event Action<int, int, string, string>? ErrorReceived;
+        public event Action<int, int, double, TickAttrib>? TickPriceReceived;
 
         public int NextOrderId { get; private set; } = 1;
         public bool IsConnected => _isConnected;
@@ -200,6 +201,44 @@ namespace IBMonitor.Services
             }
         }
 
+        public void RequestMarketData(int tickerId, Contract contract)
+        {
+            if (!_isConnected || _clientSocket == null)
+            {
+                _logger.Warning("Cannot request market data - not connected");
+                return;
+            }
+
+            try
+            {
+                _clientSocket.reqMktData(tickerId, contract, "", false, false, new List<TagValue>());
+                _logger.Debug("Market data requested for {Symbol} with tickerId {TickerId}", contract.Symbol, tickerId);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error requesting market data for {Symbol}", contract.Symbol);
+            }
+        }
+
+        public void CancelMarketData(int tickerId)
+        {
+            if (!_isConnected || _clientSocket == null)
+            {
+                _logger.Warning("Cannot cancel market data - not connected");
+                return;
+            }
+
+            try
+            {
+                _clientSocket.cancelMktData(tickerId);
+                _logger.Debug("Market data cancelled for tickerId {TickerId}", tickerId);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error cancelling market data for tickerId {TickerId}", tickerId);
+            }
+        }
+
         // EWrapper implementations
         public override void nextValidId(int orderId)
         {
@@ -228,6 +267,18 @@ namespace IBMonitor.Services
             _logger.Debug("Open Order: {OrderId} {Symbol} {OrderType} {TotalQuantity}", 
                 orderId, contract.Symbol, order.OrderType, order.TotalQuantity);
             OpenOrderReceived?.Invoke(orderId, contract, order, orderState);
+        }
+
+        public override void tickPrice(int tickerId, int field, double price, TickAttrib attribs)
+        {
+            try
+            {
+                TickPriceReceived?.Invoke(tickerId, field, price, attribs);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error processing tick price for tickerId {TickerId}", tickerId);
+            }
         }
 
         public override void error(int id, int errorCode, string errorMsg, string advancedOrderRejectJson)

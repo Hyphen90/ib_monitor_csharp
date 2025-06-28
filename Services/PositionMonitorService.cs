@@ -15,6 +15,8 @@ namespace IBMonitor.Services
         private readonly Dictionary<int, int> _orderToPositionMap = new(); // OrderId -> Position tracking
         private bool _firstPositionDetected = false;
         private readonly object _lockObject = new object();
+        private int _marketDataTickerId = -1;
+        private const int MARKET_DATA_TICKER_ID = 1000; // Fixed ticker ID for symbol market data
 
         public event Action<PositionInfo>? PositionOpened;
         public event Action<PositionInfo>? PositionClosed;
@@ -30,6 +32,8 @@ namespace IBMonitor.Services
             _ibService.PositionUpdate += OnPositionUpdate;
             _ibService.OrderStatusUpdate += OnOrderStatusUpdate;
             _ibService.OpenOrderReceived += OnOpenOrderReceived;
+            _ibService.TickPriceReceived += OnTickPriceReceived;
+            _ibService.Connected += OnIBConnected;
         }
 
         private void OnPositionUpdate(string account, Contract contract, decimal position, double avgCost)
@@ -331,6 +335,92 @@ namespace IBMonitor.Services
             }
         }
 
+        private void OnIBConnected()
+        {
+            // Subscribe to market data for the configured symbol when connected
+            SubscribeToMarketData();
+        }
+
+        private void OnTickPriceReceived(int tickerId, int field, double price, TickAttrib attribs)
+        {
+            // Only process ticks for our market data subscription
+            if (tickerId != MARKET_DATA_TICKER_ID)
+                return;
+
+            // Only process LAST price ticks (current market price)
+            if (field != TickType.LAST && field != TickType.DELAYED_LAST)
+                return;
+
+            if (string.IsNullOrEmpty(_config.Symbol))
+                return;
+
+            lock (_lockObject)
+            {
+                var position = GetPosition(_config.Symbol);
+                if (position != null && position.IsLongPosition)
+                {
+                    var oldPrice = position.MarketPrice;
+                    position.MarketPrice = price;
+
+                    // Log significant price changes
+                    if (Math.Abs(oldPrice - price) > 0.01 && oldPrice > 0)
+                    {
+                        _logger.Debug("Market price updated for {Symbol}: {OldPrice:F2} -> {NewPrice:F2}", 
+                            _config.Symbol, oldPrice, price);
+                    }
+
+                    // Check break-even trigger on every price update
+                    CheckBreakEvenTrigger(position);
+                }
+            }
+        }
+
+        private void SubscribeToMarketData()
+        {
+            if (string.IsNullOrEmpty(_config.Symbol))
+            {
+                _logger.Debug("No symbol configured for market data subscription");
+                return;
+            }
+
+            try
+            {
+                var contract = new Contract
+                {
+                    Symbol = _config.Symbol,
+                    SecType = "STK",
+                    Currency = "USD",
+                    Exchange = "SMART"
+                };
+
+                _marketDataTickerId = MARKET_DATA_TICKER_ID;
+                _ibService.RequestMarketData(_marketDataTickerId, contract);
+                _logger.Information("Subscribed to market data for symbol {Symbol} with tickerId {TickerId}", 
+                    _config.Symbol, _marketDataTickerId);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error subscribing to market data for symbol {Symbol}", _config.Symbol);
+            }
+        }
+
+        private void UnsubscribeFromMarketData()
+        {
+            if (_marketDataTickerId > 0)
+            {
+                try
+                {
+                    _ibService.CancelMarketData(_marketDataTickerId);
+                    _logger.Information("Cancelled market data subscription for tickerId {TickerId}", _marketDataTickerId);
+                    _marketDataTickerId = -1;
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, "Error cancelling market data subscription");
+                }
+            }
+        }
+
         public void ForceBreakEven(string symbol)
         {
             lock (_lockObject)
@@ -357,6 +447,31 @@ namespace IBMonitor.Services
                     UpdateStopLossOrder(position);
                 }
             }
+        }
+
+        public void UpdateSymbol(string newSymbol)
+        {
+            if (_config.Symbol == newSymbol)
+                return;
+
+            // Unsubscribe from old symbol
+            UnsubscribeFromMarketData();
+
+            // Update configuration
+            _config.Symbol = newSymbol;
+
+            // Subscribe to new symbol if connected
+            if (_ibService.IsConnected)
+            {
+                SubscribeToMarketData();
+            }
+
+            _logger.Information("Symbol updated to {Symbol}, market data subscription refreshed", newSymbol);
+        }
+
+        public void Dispose()
+        {
+            UnsubscribeFromMarketData();
         }
     }
 } 
