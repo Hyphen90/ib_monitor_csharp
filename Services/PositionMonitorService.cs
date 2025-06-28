@@ -107,7 +107,7 @@ namespace IBMonitor.Services
                         CancelExistingOrders(existingPosition);
                         PositionClosed?.Invoke(existingPosition);
                     }
-                    else if (positionSizeChanged && !isNowFlat)
+                    else                     if (positionSizeChanged && !isNowFlat)
                     {
                         // Position size changed but still open
                         _logger.Information("Position size changed: {Symbol} {OldQty} -> {NewQty}", 
@@ -115,7 +115,8 @@ namespace IBMonitor.Services
                         
                         if (position > 0) // Only for long positions
                         {
-                            UpdateStopLossOrder(existingPosition);
+                            // Only modify quantity, don't recreate the order
+                            ModifyStopLossOrderQuantity(existingPosition);
                             CheckBreakEvenTrigger(existingPosition);
                         }
                         
@@ -152,15 +153,54 @@ namespace IBMonitor.Services
         {
             if (position.Quantity <= 0) return; // Only for long positions
 
-            // Cancel existing stop-loss order
+            // Calculate new stop prices based on updated average price
+            var stopPrice = position.AveragePrice - _config.StopLoss;
+            var limitOffset = _config.GetMarketOffsetValue(stopPrice);
+            var limitPrice = stopPrice - limitOffset;
+
+            // If we have an existing order, modify it instead of canceling and recreating
             if (position.StopLossOrderId.HasValue)
             {
-                _ibService.CancelOrder(position.StopLossOrderId.Value);
-                _orderToPositionMap.Remove(position.StopLossOrderId.Value);
+                ModifyStopLossOrder(position, stopPrice, limitPrice);
+            }
+            else
+            {
+                // No existing order, create a new one
+                CreateStopLossOrder(position);
+            }
+        }
+
+        private void ModifyStopLossOrderQuantity(PositionInfo position)
+        {
+            if (position.Quantity <= 0) return; // Only for long positions
+            
+            // If no existing stop-loss order, create a new one
+            if (!position.StopLossOrderId.HasValue)
+            {
+                CreateStopLossOrder(position);
+                return;
             }
 
-            // Create new stop-loss order with updated average price
-            CreateStopLossOrder(position);
+            // Modify existing order quantity (keep same prices)
+            ModifyStopLossOrder(position, position.StopLossPrice ?? 0.0, position.StopLimitPrice ?? 0.0);
+        }
+
+        private void ModifyStopLossOrder(PositionInfo position, double stopPrice, double limitPrice)
+        {
+            if (position.Quantity <= 0 || !position.StopLossOrderId.HasValue) return;
+
+            // Update position info with new prices
+            position.StopLossPrice = stopPrice;
+            position.StopLimitPrice = limitPrice;
+
+            // Create modified order with same OrderId
+            var modifiedOrder = CreateStopLimitOrder(position.Contract, position.Quantity, stopPrice, limitPrice);
+            
+            // Modify the existing order (same OrderId triggers modification)
+            _ibService.PlaceOrder(position.StopLossOrderId.Value, position.Contract, modifiedOrder);
+
+            _logger.Information("Stop-Loss order modified: {Symbol} OrderId:{OrderId} Qty:{Quantity} Stop:{StopPrice:F2} Limit:{LimitPrice:F2}", 
+                position.Contract.Symbol, position.StopLossOrderId.Value, position.Quantity, stopPrice, limitPrice);
         }
 
         private void CheckBreakEvenTrigger(PositionInfo position)
@@ -184,32 +224,39 @@ namespace IBMonitor.Services
         {
             if (position.Quantity <= 0) return; // Only for long positions
 
-            // Cancel existing stop-loss order
-            if (position.StopLossOrderId.HasValue)
-            {
-                _ibService.CancelOrder(position.StopLossOrderId.Value);
-                _orderToPositionMap.Remove(position.StopLossOrderId.Value);
-            }
-
             var breakEvenPrice = position.AveragePrice + _config.BreakEvenOffset;
             var limitOffset = _config.GetMarketOffsetValue(breakEvenPrice);
             var limitPrice = breakEvenPrice - limitOffset;
 
-            var breakEvenOrder = CreateStopLimitOrder(position.Contract, position.Quantity, breakEvenPrice, limitPrice);
-            var orderId = _ibService.GetNextOrderId();
+            // If we have an existing stop-loss order, modify it to break-even instead of canceling
+            if (position.StopLossOrderId.HasValue)
+            {
+                // Modify existing order to break-even prices
+                ModifyStopLossOrder(position, breakEvenPrice, limitPrice);
+                
+                // Update break-even tracking
+                position.BreakEvenOrderId = position.StopLossOrderId.Value;
+                position.BreakEvenTriggerPrice = breakEvenPrice;
+            }
+            else
+            {
+                // No existing order, create new break-even order
+                var breakEvenOrder = CreateStopLimitOrder(position.Contract, position.Quantity, breakEvenPrice, limitPrice);
+                var orderId = _ibService.GetNextOrderId();
 
-            _ibService.PlaceOrder(orderId, position.Contract, breakEvenOrder);
+                _ibService.PlaceOrder(orderId, position.Contract, breakEvenOrder);
 
-            position.BreakEvenOrderId = orderId;
-            position.BreakEvenTriggerPrice = breakEvenPrice;
-            position.StopLossOrderId = orderId; // Update to track this as the current stop
-            position.StopLossPrice = breakEvenPrice;
-            position.StopLimitPrice = limitPrice;
+                position.BreakEvenOrderId = orderId;
+                position.BreakEvenTriggerPrice = breakEvenPrice;
+                position.StopLossOrderId = orderId; // Update to track this as the current stop
+                position.StopLossPrice = breakEvenPrice;
+                position.StopLimitPrice = limitPrice;
 
-            _orderToPositionMap[orderId] = GetPositionKey(position.Contract).GetHashCode();
+                _orderToPositionMap[orderId] = GetPositionKey(position.Contract).GetHashCode();
+            }
 
-            _logger.Information("Break-Even order created: {Symbol} OrderId:{OrderId} Stop:{StopPrice:F2} Limit:{LimitPrice:F2}", 
-                position.Contract.Symbol, orderId, breakEvenPrice, limitPrice);
+            _logger.Information("Break-Even order activated: {Symbol} OrderId:{OrderId} Stop:{StopPrice:F2} Limit:{LimitPrice:F2}", 
+                position.Contract.Symbol, position.StopLossOrderId.Value, breakEvenPrice, limitPrice);
         }
 
         private Order CreateStopLimitOrder(Contract contract, decimal quantity, double stopPrice, double limitPrice)
