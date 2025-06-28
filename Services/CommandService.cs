@@ -180,56 +180,24 @@ namespace IBMonitor.Services
         private string HandleShowCommand(string[] parts)
         {
             if (parts.Length < 2)
-                return "Invalid 'show' syntax. Examples: show positions, show orders, show config";
+                return "Invalid 'show' syntax. Examples: show config";
 
             var subCommand = string.Join(" ", parts.Skip(1)).ToLowerInvariant();
 
             return subCommand switch
             {
-                "positions" => ShowPositions(),
-                "orders" => ShowOrders(),
-                "position history" => ShowPositionHistory(),
-                "account" => ShowAccount(),
                 "config" => ShowConfig(),
                 _ => $"Unknown 'show' command: {subCommand}"
             };
         }
 
-        private string ShowPositions()
-        {
-            var positions = _positionService.GetAllPositions().ToList();
-            
-            if (!positions.Any())
-                return "No positions found.";
 
-            var result = "Current Positions:\n";
-            foreach (var position in positions)
-            {
-                result += $"  {position}\n";
-                if (position.StopLossPrice.HasValue)
-                    result += $"    Stop-Loss: {position.StopLossPrice.Value:F2} (Limit: {position.StopLimitPrice?.ToString("F2") ?? "N/A"})\n";
-                if (position.BreakEvenTriggered)
-                    result += $"    Break-Even: Active (Trigger: {position.BreakEvenTriggerPrice?.ToString("F2") ?? "N/A"})\n";
-            }
 
-            return result.TrimEnd();
-        }
 
-        private string ShowOrders()
-        {
-            return "Order display not yet implemented. Use TWS/Gateway for current orders.";
-        }
 
-        private string ShowPositionHistory()
-        {
-            return "Position history not yet implemented.";
-        }
 
-        private string ShowAccount()
-        {
-            var status = _ibService.IsConnected ? "Connected" : "Disconnected";
-            return $"IB Connection Status: {status}\nPort: {_config.Port}";
-        }
+
+
 
         private string ShowConfig()
         {
@@ -249,10 +217,6 @@ SET Commands:
   set symbol <SYMBOL>                    - Set symbol to monitor
 
 SHOW Commands:
-  show positions                         - Display current positions
-  show orders                            - Display open orders
-  show position history                  - Display position history
-  show account                           - Display account status
   show config                            - Display current configuration
 
 GENERAL:
