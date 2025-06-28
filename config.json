@@ -1,0 +1,7 @@
+{
+  "symbol": "AAPL",
+  "port": 7497,
+  "clientid": 1,
+  "stoploss": 0.20,
+  "marketoffset": "2%"
+} 
