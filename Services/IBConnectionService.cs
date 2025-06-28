@@ -16,7 +16,10 @@ namespace IBMonitor.Services
         private bool _isConnecting;
         private bool _isShuttingDown;
         private Timer? _reconnectTimer;
-        private const int ReconnectIntervalMs = 5000;
+        private int _reconnectAttempts = 0;
+        private const int ShortReconnectIntervalMs = 5000;   // 5 seconds for first attempts
+        private const int LongReconnectIntervalMs = 30000;   // 30 seconds for later attempts  
+        private const int MaxShortReconnectAttempts = 5;     // Number of short interval attempts
 
         public event Action? Connected;
         public event Action? Disconnected;
@@ -61,9 +64,10 @@ namespace IBMonitor.Services
 
                 if (_clientSocket.IsConnected())
                 {
-                    _logger.Information("Successfully connected to IB");
+                    _logger.Information("Successfully connected to IB Gateway/TWS on port {Port}", _config.Port);
                     _isConnected = true;
                     _isConnecting = false;
+                    _reconnectAttempts = 0; // Reset reconnect counter on successful connection
 
                     // Start reader thread
                     _reader = new EReader(_clientSocket, _signal);
@@ -80,15 +84,29 @@ namespace IBMonitor.Services
                 }
                 else
                 {
-                    _logger.Error("Failed to connect to IB");
+                    _logger.Error("Failed to connect to IB Gateway/TWS on port {Port}", _config.Port);
                     _isConnecting = false;
+                    
+                    // Start reconnect timer for failed initial connections (but only if not already scheduled)
+                    if (_reconnectTimer == null && !_isShuttingDown)
+                    {
+                        StartReconnectTimer();
+                    }
+                    
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "Error connecting to IB");
+                _logger.Error(ex, "Error connecting to IB Gateway/TWS on port {Port}", _config.Port);
                 _isConnecting = false;
+                
+                // Start reconnect timer for connection exceptions (but only if not already scheduled)
+                if (_reconnectTimer == null && !_isShuttingDown)
+                {
+                    StartReconnectTimer();
+                }
+                
                 return false;
             }
         }
@@ -98,6 +116,7 @@ namespace IBMonitor.Services
             _isShuttingDown = true;
             _reconnectTimer?.Dispose();
             _reconnectTimer = null;
+            _reconnectAttempts = 0; // Reset reconnect counter on manual disconnect
 
             if (_clientSocket?.IsConnected() == true)
             {
@@ -105,7 +124,7 @@ namespace IBMonitor.Services
             }
 
             _isConnected = false;
-            _logger.Information("Disconnected from IB");
+            _logger.Information("Manually disconnected from IB Gateway/TWS");
             Disconnected?.Invoke();
         }
 
@@ -153,14 +172,37 @@ namespace IBMonitor.Services
                 return;
                 
             _reconnectTimer?.Dispose();
+            
+            // Determine reconnect interval based on attempt count
+            _reconnectAttempts++;
+            int interval = _reconnectAttempts <= MaxShortReconnectAttempts ? 
+                ShortReconnectIntervalMs : LongReconnectIntervalMs;
+            
+            var intervalSeconds = interval / 1000;
+            _logger.Information("Connection lost. Scheduling reconnect attempt #{Attempt} in {Interval} seconds...", 
+                _reconnectAttempts, intervalSeconds);
+            
             _reconnectTimer = new Timer(async _ =>
             {
                 if (!_isConnected && !_isConnecting && !_isShuttingDown)
                 {
-                    _logger.Information("Attempting to reconnect to IB...");
-                    await ConnectAsync();
+                    _logger.Information("Reconnect attempt #{Attempt} - connecting to IB Gateway/TWS on port {Port}...", 
+                        _reconnectAttempts, _config.Port);
+                    
+                    bool success = await ConnectAsync();
+                    if (success)
+                    {
+                        _logger.Information("Reconnection successful after {Attempts} attempts", _reconnectAttempts);
+                        _reconnectAttempts = 0; // Reset counter on successful connection
+                    }
+                    else
+                    {
+                        _logger.Warning("Reconnect attempt #{Attempt} failed", _reconnectAttempts);
+                        // Schedule next attempt
+                        StartReconnectTimer();
+                    }
                 }
-            }, null, ReconnectIntervalMs, ReconnectIntervalMs);
+            }, null, interval, Timeout.Infinite); // Single shot timer
         }
 
         public void PlaceOrder(int orderId, Contract contract, Order order)
@@ -295,12 +337,13 @@ namespace IBMonitor.Services
         public override void connectionClosed()
         {
             _isConnected = false;
-            _logger.Warning("IB connection closed");
+            _logger.Warning("IB connection to Gateway/TWS on port {Port} was closed unexpectedly", _config.Port);
             Disconnected?.Invoke();
             
             // Only start reconnect timer if we're not shutting down
             if (!_isShuttingDown)
             {
+                _logger.Information("Connection lost - initiating automatic reconnection sequence...");
                 StartReconnectTimer();
             }
         }
