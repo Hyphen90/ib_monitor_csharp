@@ -72,15 +72,15 @@ namespace IBMonitor.Services
 
         private string HandleBreakEvenCommand(string[] parts)
         {
-            if (parts.Length < 4)
+            if (parts.Length < 3)
                 return "Invalid 'set breakeven' syntax. Examples: 'set breakeven trigger 100' or 'set breakeven offset 0.02' or 'set breakeven force'";
 
             var subCommand = parts[2].ToLowerInvariant();
             
             return subCommand switch
             {
-                "trigger" => SetBreakEvenTrigger(parts[3]),
-                "offset" => SetBreakEvenOffset(parts[3]),
+                "trigger" => parts.Length >= 4 ? SetBreakEvenTrigger(parts[3]) : "Missing value for 'set breakeven trigger'. Example: 'set breakeven trigger 100'",
+                "offset" => parts.Length >= 4 ? SetBreakEvenOffset(parts[3]) : "Missing value for 'set breakeven offset'. Example: 'set breakeven offset 0.02'",
                 "force" => ForceBreakEven(),
                 _ => $"Unknown 'breakeven' command: {subCommand}"
             };
