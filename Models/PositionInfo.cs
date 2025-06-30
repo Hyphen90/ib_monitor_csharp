@@ -13,6 +13,9 @@ namespace IBMonitor.Models
         public double RealizedPnL { get; set; }
         public DateTime LastUpdate { get; set; } = DateTime.Now;
         
+        // Position timing tracking
+        public DateTime? FirstFillTimestamp { get; set; }
+        
         // Stop-Loss tracking
         public int? StopLossOrderId { get; set; }
         public double? StopLossPrice { get; set; }

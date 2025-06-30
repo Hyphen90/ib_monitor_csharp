@@ -60,14 +60,15 @@ namespace IBMonitor.Services
                         Contract = contract,
                         Quantity = position,
                         AveragePrice = avgCost,
-                        LastUpdate = DateTime.Now
+                        LastUpdate = DateTime.Now,
+                        FirstFillTimestamp = DateTime.Now  // Set first fill timestamp when position is first detected
                     };
 
                     _positions[key] = positionInfo;
                     _logger.Information("New position detected: {Position}", positionInfo);
                     
                     // Execute position open script if configured
-                    ExecutePositionOpenScript();
+                    ExecutePositionOpenScript(positionInfo);
                     
                     // Create stop-loss order for long positions only
                     if (position > 0)
@@ -329,7 +330,7 @@ namespace IBMonitor.Services
             }
         }
 
-        private void ExecutePositionOpenScript()
+        private void ExecutePositionOpenScript(PositionInfo position)
         {
             if (string.IsNullOrEmpty(_config.PositionOpenScript) || _firstPositionDetected)
                 return;
@@ -344,15 +345,21 @@ namespace IBMonitor.Services
 
             try
             {
+                // Prepare script arguments: symbol and first fill timestamp
+                var symbol = position.Contract.Symbol;
+                var firstFillTime = position.FirstFillTimestamp?.ToString("yyyy-MM-dd HH:mm:ss") ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                
                 var processInfo = new ProcessStartInfo
                 {
                     FileName = _config.PositionOpenScript,
+                    Arguments = $"\"{symbol}\" \"{firstFillTime}\"",
                     UseShellExecute = true,
                     CreateNoWindow = false
                 };
 
                 Process.Start(processInfo);
-                _logger.Information("Position Open Script executed: {ScriptPath}", _config.PositionOpenScript);
+                _logger.Information("Position Open Script executed: {ScriptPath} with arguments: {Symbol} {FirstFillTime}", 
+                    _config.PositionOpenScript, symbol, firstFillTime);
             }
             catch (Exception ex)
             {

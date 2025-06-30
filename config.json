@@ -2,6 +2,10 @@
   "symbol": "AAPL",
   "port": 7497,
   "clientid": 1,
-  "stoploss": 0.20,
-  "marketoffset": "2%"
+  "stoploss": 0.50,
+  "marketoffset": "3%",
+  "breakeven": 0.10,
+  "breakevenoffset": 0.01,
+  "positionopenscript": "positiontrigger.ahk",
+  "logfile": true
 } 
