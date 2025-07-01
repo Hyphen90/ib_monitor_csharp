@@ -34,6 +34,9 @@ namespace IBMonitor.Config
         [JsonProperty("logfile")]
         public bool LogFile { get; set; } = false;
 
+        [JsonProperty("maxshares")]
+        public int? MaxShares { get; set; } = null; // null = unlimited
+
         /// <summary>
         /// Parses the MarketOffset string to a double value.
         /// Supports both absolute values (e.g., "0.05") and percentage values (e.g., "2%").
@@ -67,4 +70,4 @@ namespace IBMonitor.Config
             return JsonConvert.SerializeObject(this, Formatting.Indented);
         }
     }
-} 
+}

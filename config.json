@@ -7,5 +7,6 @@
   "breakeven": 0.10,
   "breakevenoffset": 0.01,
   "positionopenscript": "positiontrigger.ahk",
-  "logfile": true
-} 
+  "logfile": true,
+  "maxshares": 500
+}

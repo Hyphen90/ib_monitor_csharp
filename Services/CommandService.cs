@@ -102,6 +102,7 @@ namespace IBMonitor.Services
             {
                 "stoploss" => SetStopLoss(value),
                 "marketoffset" => SetMarketOffset(value),
+                "maxshares" => SetMaxShares(value),
                 "symbol" => SetSymbol(value),
                 "breakeven" => HandleBreakEvenCommand(parts),
                 _ => $"Unknown 'set' command: {subCommand}"
@@ -161,6 +162,26 @@ namespace IBMonitor.Services
                 _config.MarketOffset = oldValue; // Rollback
                 return $"Invalid MarketOffset value: {value}. Use absolute values (e.g. 0.05) or percentage (e.g. 2%)";
             }
+        }
+
+        private string SetMaxShares(string value)
+        {
+            var oldValue = _config.MaxShares;
+            
+            if (value.ToLowerInvariant() == "unlimited" || value.ToLowerInvariant() == "none")
+            {
+                _config.MaxShares = null;
+                _logger.Information("MaxShares changed from {OldValue} to unlimited", oldValue);
+                return $"MaxShares set to unlimited (was: {oldValue?.ToString() ?? "unlimited"})";
+            }
+            
+            if (!int.TryParse(value, out var maxShares) || maxShares <= 0)
+                return "Invalid MaxShares value. Must be a positive integer or 'unlimited'.";
+
+            _config.MaxShares = maxShares;
+            
+            _logger.Information("MaxShares changed from {OldValue} to {NewValue}", oldValue, maxShares);
+            return $"MaxShares set to {maxShares} (was: {oldValue?.ToString() ?? "unlimited"})";
         }
 
         private string SetSymbol(string symbol)
@@ -271,6 +292,21 @@ namespace IBMonitor.Services
         {
             try
             {
+                // Check MaxShares limit before placing order
+                if (_config.MaxShares.HasValue)
+                {
+                    var currentPosition = _positionService.GetPosition(_config.Symbol!);
+                    var currentQuantity = currentPosition?.Quantity ?? 0m;
+                    var newTotalQuantity = currentQuantity + quantity;
+
+                    if (newTotalQuantity > _config.MaxShares.Value)
+                    {
+                        var availableShares = Math.Max(0, _config.MaxShares.Value - (int)currentQuantity);
+                        return $"Buy order rejected: Would exceed maximum position size of {_config.MaxShares} shares. " +
+                               $"Current position: {currentQuantity}, Requested: {quantity}, Available: {availableShares}";
+                    }
+                }
+
                 var contract = CreateContract(_config.Symbol!);
                 var orderId = _ibService.GetNextOrderId();
 
@@ -409,6 +445,7 @@ CLOSE Commands:
 SET Commands:
   set stoploss <value>                   - Set stop-loss distance in USD
   set marketoffset <value or percent>    - Set market offset (e.g. 0.05 or 2%)
+  set maxshares <value or unlimited>     - Set maximum position size (e.g. 500 or unlimited)
   set breakeven trigger <value>          - Set break-even trigger in USD
   set breakeven offset <value>           - Set break-even offset in USD
   set breakeven force                    - Manually trigger break-even
@@ -422,7 +459,8 @@ GENERAL:
   exit                                   - Exit program
 
 Note: Buy orders automatically create stop-loss orders and adjust them based on average cost.
-      The C command is ideal for pre-market use as it uses limit orders instead of market orders.";
+      The C command is ideal for pre-market use as it uses limit orders instead of market orders.
+      MaxShares prevents exceeding the specified position size across multiple buy orders.";
         }
 
         private string HandleExit()
