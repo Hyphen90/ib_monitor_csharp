@@ -21,7 +21,7 @@ namespace IBMonitor.Services
             // File Logging
             if (config.LogFile)
             {
-                var logFileName = $"Log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log";
+                var logFileName = "Log_.log";
                 loggerConfig.WriteTo.File(
                     path: logFileName,
                     outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] {Message:lj}{NewLine}{Exception}",
@@ -46,4 +46,4 @@ namespace IBMonitor.Services
             };
         }
     }
-} 
+}
