@@ -37,6 +37,36 @@ namespace IBMonitor.Services
 
             try
             {
+                // Check if close mode is active and block most commands
+                if (_positionService.IsClosing)
+                {
+                    // Only allow help and show commands during close mode
+                    if (command == "help" || command == "show")
+                    {
+                        // Allow these commands to proceed
+                    }
+                    else if (command == "c")
+                    {
+                        return "Close command is already in progress. Please wait for all positions to be closed.";
+                    }
+                    else if (command.StartsWith("b") && command.Length > 1)
+                    {
+                        return "Buy commands are blocked during close mode. Please wait for all positions to be closed.";
+                    }
+                    else if (command == "set")
+                    {
+                        return "Set commands are blocked during close mode. Please wait for all positions to be closed.";
+                    }
+                    else if (command == "exit")
+                    {
+                        return "Exit command is blocked during close mode. Please wait for all positions to be closed.";
+                    }
+                    else
+                    {
+                        return "Commands are blocked during close mode. Please wait for all positions to be closed. Use 'help' or 'show' for information.";
+                    }
+                }
+
                 // Check for buy commands (B100, B100,4.36, etc.)
                 if (command.StartsWith("b") && command.Length > 1)
                 {
@@ -45,6 +75,7 @@ namespace IBMonitor.Services
 
                 return command switch
                 {
+                    "c" => await HandleCloseCommand(),
                     "set" => HandleSetCommand(parts),
                     "show" => HandleShowCommand(parts),
                     "help" => ShowHelp(),
@@ -182,6 +213,21 @@ namespace IBMonitor.Services
 
             _positionService.ForceBreakEven(_config.Symbol);
             return $"Break-Even manually triggered for {_config.Symbol}.";
+        }
+
+        private async Task<string> HandleCloseCommand()
+        {
+            try
+            {
+                var result = await _positionService.CloseAllPositionsAndSetSellOrder();
+                _logger.Information("Close command executed: {Result}", result);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error executing close command");
+                return $"Error executing close command: {ex.Message}";
+            }
         }
 
         private async Task<string> HandleBuyCommand(string input)
@@ -357,6 +403,9 @@ BUY Commands:
   B<quantity>                            - Buy shares at Ask + MarketOffset (e.g. B100)
   B<quantity>,<price>                    - Buy shares at specific limit price (e.g. B100,4.36)
 
+CLOSE Commands:
+  C                                      - Cancel all orders and place sell limit at Bid - MarketOffset
+
 SET Commands:
   set stoploss <value>                   - Set stop-loss distance in USD
   set marketoffset <value or percent>    - Set market offset (e.g. 0.05 or 2%)
@@ -372,7 +421,8 @@ GENERAL:
   help                                   - Show this help
   exit                                   - Exit program
 
-Note: Buy orders automatically create stop-loss orders and adjust them based on average cost.";
+Note: Buy orders automatically create stop-loss orders and adjust them based on average cost.
+      The C command is ideal for pre-market use as it uses limit orders instead of market orders.";
         }
 
         private string HandleExit()

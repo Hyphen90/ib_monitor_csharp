@@ -3,7 +3,7 @@
   "port": 7497,
   "clientid": 1,
   "stoploss": 0.50,
-  "marketoffset": "3%",
+  "marketoffset": "0.10",
   "breakeven": 0.10,
   "breakevenoffset": 0.01,
   "positionopenscript": "positiontrigger.ahk",

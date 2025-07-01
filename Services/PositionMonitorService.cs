@@ -18,6 +18,7 @@ namespace IBMonitor.Services
         private int _marketDataTickerId = -1;
         private const int MARKET_DATA_TICKER_ID = 1000; // Fixed ticker ID for symbol market data
         private double _currentAskPrice = 0.0;
+        private bool _isClosing = false;
 
         public event Action<PositionInfo>? PositionOpened;
         public event Action<PositionInfo>? PositionClosed;
@@ -72,10 +73,14 @@ namespace IBMonitor.Services
                     // Execute position open script if configured
                     ExecutePositionOpenScript(positionInfo);
                     
-                    // Create stop-loss order for long positions only
-                    if (position > 0)
+                    // Create stop-loss order for long positions only (but not during close mode)
+                    if (position > 0 && !_isClosing)
                     {
                         CreateStopLossOrder(positionInfo);
+                    }
+                    else if (position > 0 && _isClosing)
+                    {
+                        _logger.Debug("Skipping stop-loss creation for {Symbol} - close mode is active", contract.Symbol);
                     }
 
                     PositionOpened?.Invoke(positionInfo);
@@ -124,16 +129,27 @@ namespace IBMonitor.Services
                             {
                                 ModifyStopLossOrderQuantity(existingPosition);
                             }
+                            else if (!_isClosing)
+                            {
+                                // No existing stop-loss, create a new one (but not during close mode)
+                                CreateStopLossOrder(existingPosition);
+                            }
                             else
                             {
-                                // No existing stop-loss, create a new one
-                                CreateStopLossOrder(existingPosition);
+                                _logger.Debug("Skipping stop-loss creation for {Symbol} - close mode is active", contract.Symbol);
                             }
                             CheckBreakEvenTrigger(existingPosition);
                         }
                         
                         PositionChanged?.Invoke(existingPosition);
                     }
+                }
+
+                // Reset closing flag when all positions are flat
+                if (_isClosing && _positions.Values.All(p => p.IsFlat))
+                {
+                    _isClosing = false;
+                    _logger.Information("Close mode deactivated - all positions are flat");
                 }
             }
         }
@@ -492,6 +508,19 @@ namespace IBMonitor.Services
                             _config.Symbol, oldAskPrice, price);
                     }
                 }
+                // Process BID price ticks for sell orders
+                else if (field == TickType.BID || field == TickType.DELAYED_BID)
+                {
+                    var oldBidPrice = _currentBidPrice;
+                    _currentBidPrice = price;
+
+                    // Log significant bid price changes
+                    if (Math.Abs(oldBidPrice - price) > 0.01 && oldBidPrice > 0)
+                    {
+                        _logger.Debug("Bid price updated for {Symbol}: {OldPrice:F2} -> {NewPrice:F2}", 
+                            _config.Symbol, oldBidPrice, price);
+                    }
+                }
                 // Process LAST price ticks (current market price) for existing positions
                 else if (field == TickType.LAST || field == TickType.DELAYED_LAST)
                 {
@@ -597,10 +626,11 @@ namespace IBMonitor.Services
             // Unsubscribe from old symbol
             UnsubscribeFromMarketData();
 
-            // Reset ask price when changing symbols
+            // Reset ask and bid prices when changing symbols
             lock (_lockObject)
             {
                 _currentAskPrice = 0.0;
+                _currentBidPrice = 0.0;
             }
 
             // Update configuration
@@ -631,6 +661,187 @@ namespace IBMonitor.Services
                     _logger.Warning("No ask price available for {Symbol}. Market data may not be subscribed or available.", symbol);
                 }
                 return _currentAskPrice;
+            }
+        }
+
+        public async Task<string> CloseAllPositionsAndSetSellOrder()
+        {
+            var results = new List<string>();
+            
+            lock (_lockObject)
+            {
+                // Activate close mode to prevent new stop-loss orders during close process
+                _isClosing = true;
+                _logger.Information("Close mode activated - preventing new stop-loss orders during close process");
+                
+                // 1. Cancel all existing orders
+                var cancelledOrders = new List<int>();
+                foreach (var position in _positions.Values)
+                {
+                    if (position.StopLossOrderId.HasValue)
+                    {
+                        _ibService.CancelOrder(position.StopLossOrderId.Value);
+                        cancelledOrders.Add(position.StopLossOrderId.Value);
+                        _orderToPositionMap.Remove(position.StopLossOrderId.Value);
+                        position.StopLossOrderId = null;
+                        position.StopLossPrice = null;
+                        position.StopLimitPrice = null;
+                    }
+                    
+                    if (position.BreakEvenOrderId.HasValue && position.BreakEvenOrderId != position.StopLossOrderId)
+                    {
+                        _ibService.CancelOrder(position.BreakEvenOrderId.Value);
+                        cancelledOrders.Add(position.BreakEvenOrderId.Value);
+                        _orderToPositionMap.Remove(position.BreakEvenOrderId.Value);
+                        position.BreakEvenOrderId = null;
+                        position.BreakEvenTriggerPrice = null;
+                    }
+                }
+                
+                if (cancelledOrders.Any())
+                {
+                    results.Add($"Cancelled {cancelledOrders.Count} existing orders: {string.Join(", ", cancelledOrders)}");
+                }
+
+                // Check if all positions are already flat and reset close mode immediately
+                if (_positions.Values.All(p => p.IsFlat))
+                {
+                    _isClosing = false;
+                    _logger.Information("Close mode deactivated immediately - all positions are already flat");
+                    results.Add("All positions are already closed. Close mode deactivated.");
+                    return string.Join("\n", results);
+                }
+            }
+
+            // 2. Set sell limit order at bid - market offset to close all long positions
+            if (!string.IsNullOrEmpty(_config.Symbol))
+            {
+                try
+                {
+                    var bidPrice = GetCurrentBidPrice(_config.Symbol);
+                    if (bidPrice > 0)
+                    {
+                        // Calculate total long position quantity to close
+                        var totalLongQuantity = 0m;
+                        lock (_lockObject)
+                        {
+                            foreach (var position in _positions.Values.Where(p => p.Quantity > 0))
+                            {
+                                totalLongQuantity += position.Quantity;
+                            }
+                        }
+
+                        if (totalLongQuantity > 0)
+                        {
+                            var marketOffset = _config.GetMarketOffsetValue(bidPrice);
+                            var sellLimitPrice = RoundPriceForIB(bidPrice - marketOffset);
+                            
+                            var contract = CreateContract(_config.Symbol);
+                            var sellOrder = CreateSellLimitOrder(totalLongQuantity, sellLimitPrice);
+                            var orderId = _ibService.GetNextOrderId();
+                            
+                            _ibService.PlaceOrder(orderId, contract, sellOrder);
+                            
+                            results.Add($"Sell limit order placed to close {totalLongQuantity} shares at ${FormatPrice(sellLimitPrice)} (Bid: ${FormatPrice(bidPrice)} - Offset: ${FormatPrice(marketOffset)}, OrderId: {orderId})");
+                            
+                            _logger.Information("Sell limit order placed to close positions: {Symbol} OrderId:{OrderId} Qty:{Quantity} Price:{Price}", 
+                                _config.Symbol, orderId, totalLongQuantity, sellLimitPrice);
+                        }
+                        else
+                        {
+                            results.Add("No long positions found to close.");
+                        }
+                    }
+                    else
+                    {
+                        results.Add("Unable to get current bid price for sell limit order. Market data may not be available.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, "Error placing sell limit order");
+                    results.Add($"Error placing sell limit order: {ex.Message}");
+                }
+            }
+            else
+            {
+                results.Add("No symbol configured for sell limit order.");
+            }
+
+            return string.Join("\n", results);
+        }
+
+        private Order CreateMarketCloseOrder(PositionInfo position)
+        {
+            var action = position.Quantity > 0 ? "SELL" : "BUY";
+            var quantity = Math.Abs(position.Quantity);
+            
+            return new Order
+            {
+                Action = action,
+                OrderType = "MKT",
+                TotalQuantity = quantity,
+                Tif = "GTC",
+                Transmit = true,
+                OutsideRth = true
+            };
+        }
+
+        private Order CreateSellLimitOrder(decimal quantity, double limitPrice)
+        {
+            return new Order
+            {
+                Action = "SELL",
+                OrderType = "LMT",
+                TotalQuantity = quantity,
+                LmtPrice = limitPrice,
+                Tif = "GTC",
+                Transmit = true,
+                OutsideRth = true
+            };
+        }
+
+        private Contract CreateContract(string symbol)
+        {
+            return new Contract
+            {
+                Symbol = symbol,
+                SecType = "STK",
+                Currency = "USD",
+                Exchange = "SMART",
+                PrimaryExch = ""
+            };
+        }
+
+        private double _currentBidPrice = 0.0;
+
+        public double GetCurrentBidPrice(string symbol)
+        {
+            if (string.IsNullOrEmpty(symbol) || !symbol.Equals(_config.Symbol, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.Warning("Bid price requested for symbol {Symbol} but current symbol is {CurrentSymbol}", 
+                    symbol, _config.Symbol);
+                return 0.0;
+            }
+
+            lock (_lockObject)
+            {
+                if (_currentBidPrice <= 0)
+                {
+                    _logger.Warning("No bid price available for {Symbol}. Market data may not be subscribed or available.", symbol);
+                }
+                return _currentBidPrice;
+            }
+        }
+
+        public bool IsClosing
+        {
+            get
+            {
+                lock (_lockObject)
+                {
+                    return _isClosing;
+                }
             }
         }
 
