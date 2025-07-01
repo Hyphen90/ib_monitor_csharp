@@ -17,6 +17,7 @@ namespace IBMonitor.Services
         private readonly object _lockObject = new object();
         private int _marketDataTickerId = -1;
         private const int MARKET_DATA_TICKER_ID = 1000; // Fixed ticker ID for symbol market data
+        private double _currentAskPrice = 0.0;
 
         public event Action<PositionInfo>? PositionOpened;
         public event Action<PositionInfo>? PositionClosed;
@@ -65,7 +66,8 @@ namespace IBMonitor.Services
                     };
 
                     _positions[key] = positionInfo;
-                    _logger.Information("New position detected: {Position}", positionInfo);
+                    _logger.Information("New position detected: {Symbol} - Qty: {Quantity}, AvgPrice: {AvgPrice:F2}", 
+                        contract.Symbol, position, avgCost);
                     
                     // Execute position open script if configured
                     ExecutePositionOpenScript(positionInfo);
@@ -90,12 +92,13 @@ namespace IBMonitor.Services
 
                     if (avgPriceChanged)
                     {
-                                        _logger.Information("Average price changed from {OldPrice:F2} to {NewPrice:F2} for {Symbol}",
+                        var priceChangePerShare = Math.Abs(existingPosition.AveragePrice - avgCost);
+                        _logger.Information("Average price changed from {OldPrice:F2} to {NewPrice:F2} for {Symbol}",
                             existingPosition.AveragePrice, avgCost, contract.Symbol);
                         existingPosition.AveragePrice = avgCost;
                         
-                        // Update stop-loss orders immediately on average price change
-                        if (position > 0)
+                        // Only update stop-loss if price change is more than 1 cent per share (to avoid commission-only adjustments)
+                        if (position > 0 && priceChangePerShare >= 0.02)
                         {
                             UpdateStopLossOrder(existingPosition);
                         }
@@ -103,12 +106,12 @@ namespace IBMonitor.Services
 
                     if (isNowFlat && !wasFlat)
                     {
-                        // Position closed
-                        _logger.Information("Position closed: {Symbol}", contract.Symbol);
+                        // Position closed - reset break-even trigger for future positions
+                        existingPosition.BreakEvenTriggered = false;
                         CancelExistingOrders(existingPosition);
                         PositionClosed?.Invoke(existingPosition);
                     }
-                    else                     if (positionSizeChanged && !isNowFlat)
+                    else if (positionSizeChanged && !isNowFlat)
                     {
                         // Position size changed but still open
                         _logger.Information("Position size changed: {Symbol} {OldQty} -> {NewQty}", 
@@ -116,8 +119,16 @@ namespace IBMonitor.Services
                         
                         if (position > 0) // Only for long positions
                         {
-                            // Only modify quantity, don't recreate the order
-                            ModifyStopLossOrderQuantity(existingPosition);
+                            // Only modify quantity if we have an existing stop-loss order
+                            if (existingPosition.StopLossOrderId.HasValue)
+                            {
+                                ModifyStopLossOrderQuantity(existingPosition);
+                            }
+                            else
+                            {
+                                // No existing stop-loss, create a new one
+                                CreateStopLossOrder(existingPosition);
+                            }
                             CheckBreakEvenTrigger(existingPosition);
                         }
                         
@@ -131,9 +142,9 @@ namespace IBMonitor.Services
         {
             if (position.Quantity <= 0) return; // Only for long positions
 
-            var stopPrice = position.AveragePrice - _config.StopLoss;
+            var stopPrice = RoundPriceForIB(position.AveragePrice - _config.StopLoss);
             var limitOffset = _config.GetMarketOffsetValue(stopPrice);
-            var limitPrice = stopPrice - limitOffset;
+            var limitPrice = RoundPriceForIB(stopPrice - limitOffset);
 
             var stopOrder = CreateStopLimitOrder(position.Contract, position.Quantity, stopPrice, limitPrice);
             var orderId = _ibService.GetNextOrderId();
@@ -146,8 +157,8 @@ namespace IBMonitor.Services
 
             _orderToPositionMap[orderId] = GetPositionKey(position.Contract).GetHashCode();
 
-            _logger.Information("Stop-Loss order created: {Symbol} OrderId:{OrderId} Stop:{StopPrice:F2} Limit:{LimitPrice:F2}", 
-                position.Contract.Symbol, orderId, stopPrice, limitPrice);
+            _logger.Information("Stop-Loss order created: {Symbol} OrderId:{OrderId} Stop:{StopPrice} Limit:{LimitPrice}", 
+                position.Contract.Symbol, orderId, FormatPrice(stopPrice), FormatPrice(limitPrice));
         }
 
         private void UpdateStopLossOrder(PositionInfo position)
@@ -155,9 +166,9 @@ namespace IBMonitor.Services
             if (position.Quantity <= 0) return; // Only for long positions
 
             // Calculate new stop prices based on updated average price
-            var stopPrice = position.AveragePrice - _config.StopLoss;
+            var stopPrice = RoundPriceForIB(position.AveragePrice - _config.StopLoss);
             var limitOffset = _config.GetMarketOffsetValue(stopPrice);
-            var limitPrice = stopPrice - limitOffset;
+            var limitPrice = RoundPriceForIB(stopPrice - limitOffset);
 
             // If we have an existing order, modify it instead of canceling and recreating
             if (position.StopLossOrderId.HasValue)
@@ -200,8 +211,8 @@ namespace IBMonitor.Services
             // Modify the existing order (same OrderId triggers modification)
             _ibService.PlaceOrder(position.StopLossOrderId.Value, position.Contract, modifiedOrder);
 
-            _logger.Information("Stop-Loss order modified: {Symbol} OrderId:{OrderId} Qty:{Quantity} Stop:{StopPrice:F2} Limit:{LimitPrice:F2}", 
-                position.Contract.Symbol, position.StopLossOrderId.Value, position.Quantity, stopPrice, limitPrice);
+            _logger.Information("Stop-Loss order modified: {Symbol} OrderId:{OrderId} Qty:{Quantity} Stop:{StopPrice} Limit:{LimitPrice}", 
+                position.Contract.Symbol, position.StopLossOrderId.Value, position.Quantity, FormatPrice(stopPrice), FormatPrice(limitPrice));
         }
 
         private void CheckBreakEvenTrigger(PositionInfo position)
@@ -209,12 +220,14 @@ namespace IBMonitor.Services
             if (position.Quantity <= 0 || !_config.BreakEven.HasValue || position.BreakEvenTriggered) 
                 return;
 
-            var currentProfit = (position.MarketPrice - position.AveragePrice) * (double)position.Quantity;
+            // Break-even should trigger when market price reaches average price + break-even threshold
+            var triggerPrice = position.AveragePrice + _config.BreakEven.Value;
             
-            if (currentProfit >= _config.BreakEven.Value)
+            if (position.MarketPrice >= triggerPrice)
             {
-                _logger.Information("Break-Even threshold reached for {Symbol}. Profit: {Profit:F2}, Threshold: {Threshold:F2}", 
-                    position.Contract.Symbol, currentProfit, _config.BreakEven.Value);
+                var stopPrice = position.AveragePrice + _config.BreakEvenOffset;
+                _logger.Information("Break-Even threshold reached for {Symbol}. Market: {MarketPrice:F2}, Trigger: {TriggerPrice:F2} (AvgPrice + {BreakEven:F2}), Stop: {StopPrice:F2} (AvgPrice + {BreakEvenOffset:F2})", 
+                    position.Contract.Symbol, position.MarketPrice, triggerPrice, _config.BreakEven.Value, stopPrice, _config.BreakEvenOffset);
                 
                 CreateBreakEvenOrder(position);
                 position.BreakEvenTriggered = true;
@@ -225,9 +238,9 @@ namespace IBMonitor.Services
         {
             if (position.Quantity <= 0) return; // Only for long positions
 
-            var breakEvenPrice = position.AveragePrice + _config.BreakEvenOffset;
+            var breakEvenPrice = RoundPriceForIB(position.AveragePrice + _config.BreakEvenOffset);
             var limitOffset = _config.GetMarketOffsetValue(breakEvenPrice);
-            var limitPrice = breakEvenPrice - limitOffset;
+            var limitPrice = RoundPriceForIB(breakEvenPrice - limitOffset);
 
             // If we have an existing stop-loss order, modify it to break-even instead of canceling
             if (position.StopLossOrderId.HasValue)
@@ -256,12 +269,16 @@ namespace IBMonitor.Services
                 _orderToPositionMap[orderId] = GetPositionKey(position.Contract).GetHashCode();
             }
 
-            _logger.Information("Break-Even order activated: {Symbol} OrderId:{OrderId} Stop:{StopPrice:F2} Limit:{LimitPrice:F2}", 
-                position.Contract.Symbol, position.StopLossOrderId.Value, breakEvenPrice, limitPrice);
+            _logger.Information("Break-Even order activated: {Symbol} OrderId:{OrderId} Stop:{StopPrice} Limit:{LimitPrice}", 
+                position.Contract.Symbol, position.StopLossOrderId.Value, FormatPrice(breakEvenPrice), FormatPrice(limitPrice));
         }
 
         private Order CreateStopLimitOrder(Contract contract, decimal quantity, double stopPrice, double limitPrice)
         {
+            // Ensure the contract uses SMART routing for stop-loss orders
+            contract.Exchange = "SMART";
+            contract.PrimaryExch = "";
+            
             return new Order
             {
                 Action = "SELL", // Only for long positions
@@ -270,24 +287,29 @@ namespace IBMonitor.Services
                 AuxPrice = stopPrice,
                 LmtPrice = limitPrice,
                 Tif = "GTC",
-                Transmit = true
+                Transmit = true,
+                OutsideRth = true  // Allow execution outside regular trading hours
             };
         }
 
         private void CancelExistingOrders(PositionInfo position)
         {
-            if (position.StopLossOrderId.HasValue)
+            // Only cancel orders that are still being tracked (i.e., still active)
+            if (position.StopLossOrderId.HasValue && _orderToPositionMap.ContainsKey(position.StopLossOrderId.Value))
             {
                 _ibService.CancelOrder(position.StopLossOrderId.Value);
                 _orderToPositionMap.Remove(position.StopLossOrderId.Value);
                 position.StopLossOrderId = null;
+                position.StopLossPrice = null;
+                position.StopLimitPrice = null;
             }
 
-            if (position.BreakEvenOrderId.HasValue)
+            if (position.BreakEvenOrderId.HasValue && _orderToPositionMap.ContainsKey(position.BreakEvenOrderId.Value))
             {
                 _ibService.CancelOrder(position.BreakEvenOrderId.Value);
                 _orderToPositionMap.Remove(position.BreakEvenOrderId.Value);
                 position.BreakEvenOrderId = null;
+                position.BreakEvenTriggerPrice = null;
             }
         }
 
@@ -302,6 +324,29 @@ namespace IBMonitor.Services
                 if (status == "Filled" || status == "Cancelled")
                 {
                     _orderToPositionMap.Remove(orderId);
+                    
+                    // Clear order references from positions when order is filled/cancelled
+                    lock (_lockObject)
+                    {
+                        foreach (var position in _positions.Values)
+                        {
+                            if (position.StopLossOrderId == orderId)
+                            {
+                                _logger.Debug("Clearing Stop-Loss order reference {OrderId} from position {Symbol} (Status: {Status})", 
+                                    orderId, position.Contract.Symbol, status);
+                                position.StopLossOrderId = null;
+                                position.StopLossPrice = null;
+                                position.StopLimitPrice = null;
+                            }
+                            if (position.BreakEvenOrderId == orderId)
+                            {
+                                _logger.Debug("Clearing Break-Even order reference {OrderId} from position {Symbol} (Status: {Status})", 
+                                    orderId, position.Contract.Symbol, status);
+                                position.BreakEvenOrderId = null;
+                                position.BreakEvenTriggerPrice = null;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -367,6 +412,34 @@ namespace IBMonitor.Services
             }
         }
 
+        private double RoundPriceForIB(double price)
+        {
+            // IB price rules: Under $1 = 4 decimal places, $1 and above = 2 decimal places
+            if (price < 1.0)
+            {
+                return Math.Round(price, 4);
+            }
+            else
+            {
+                return Math.Round(price, 2);
+            }
+        }
+
+        private string FormatPrice(double price)
+        {
+            // Dynamic formatting: show only necessary decimal places
+            if (price < 1.0)
+            {
+                // For prices under $1, show up to 4 decimals but remove trailing zeros
+                return price.ToString("0.####");
+            }
+            else
+            {
+                // For prices $1 and above, show up to 2 decimals but remove trailing zeros
+                return price.ToString("0.##");
+            }
+        }
+
         private string GetPositionKey(Contract contract)
         {
             return $"{contract.Symbol}_{contract.SecType}_{contract.Currency}_{contract.Exchange}";
@@ -401,30 +474,43 @@ namespace IBMonitor.Services
             if (tickerId != MARKET_DATA_TICKER_ID)
                 return;
 
-            // Only process LAST price ticks (current market price)
-            if (field != TickType.LAST && field != TickType.DELAYED_LAST)
-                return;
-
             if (string.IsNullOrEmpty(_config.Symbol))
                 return;
 
             lock (_lockObject)
             {
-                var position = GetPosition(_config.Symbol);
-                if (position != null && position.IsLongPosition)
+                // Process ASK price ticks for buy orders
+                if (field == TickType.ASK || field == TickType.DELAYED_ASK)
                 {
-                    var oldPrice = position.MarketPrice;
-                    position.MarketPrice = price;
+                    var oldAskPrice = _currentAskPrice;
+                    _currentAskPrice = price;
 
-                    // Log significant price changes
-                    if (Math.Abs(oldPrice - price) > 0.01 && oldPrice > 0)
+                    // Log significant ask price changes
+                    if (Math.Abs(oldAskPrice - price) > 0.01 && oldAskPrice > 0)
                     {
-                        _logger.Debug("Market price updated for {Symbol}: {OldPrice:F2} -> {NewPrice:F2}", 
-                            _config.Symbol, oldPrice, price);
+                        _logger.Debug("Ask price updated for {Symbol}: {OldPrice:F2} -> {NewPrice:F2}", 
+                            _config.Symbol, oldAskPrice, price);
                     }
+                }
+                // Process LAST price ticks (current market price) for existing positions
+                else if (field == TickType.LAST || field == TickType.DELAYED_LAST)
+                {
+                    var position = GetPosition(_config.Symbol);
+                    if (position != null && position.IsLongPosition)
+                    {
+                        var oldPrice = position.MarketPrice;
+                        position.MarketPrice = price;
 
-                    // Check break-even trigger on every price update
-                    CheckBreakEvenTrigger(position);
+                        // Log significant price changes
+                        if (Math.Abs(oldPrice - price) > 0.01 && oldPrice > 0)
+                        {
+                            _logger.Debug("Market price updated for {Symbol}: {OldPrice:F2} -> {NewPrice:F2}", 
+                                _config.Symbol, oldPrice, price);
+                        }
+
+                        // Check break-even trigger on every price update
+                        CheckBreakEvenTrigger(position);
+                    }
                 }
             }
         }
@@ -511,6 +597,12 @@ namespace IBMonitor.Services
             // Unsubscribe from old symbol
             UnsubscribeFromMarketData();
 
+            // Reset ask price when changing symbols
+            lock (_lockObject)
+            {
+                _currentAskPrice = 0.0;
+            }
+
             // Update configuration
             _config.Symbol = newSymbol;
 
@@ -523,9 +615,28 @@ namespace IBMonitor.Services
             _logger.Information("Symbol updated to {Symbol}, market data subscription refreshed", newSymbol);
         }
 
+        public double GetCurrentAskPrice(string symbol)
+        {
+            if (string.IsNullOrEmpty(symbol) || !symbol.Equals(_config.Symbol, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.Warning("Ask price requested for symbol {Symbol} but current symbol is {CurrentSymbol}", 
+                    symbol, _config.Symbol);
+                return 0.0;
+            }
+
+            lock (_lockObject)
+            {
+                if (_currentAskPrice <= 0)
+                {
+                    _logger.Warning("No ask price available for {Symbol}. Market data may not be subscribed or available.", symbol);
+                }
+                return _currentAskPrice;
+            }
+        }
+
         public void Dispose()
         {
             UnsubscribeFromMarketData();
         }
     }
-} 
+}

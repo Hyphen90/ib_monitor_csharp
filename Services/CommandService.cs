@@ -2,6 +2,7 @@ using Serilog;
 using IBMonitor.Config;
 using IBMonitor.Models;
 using System.Text.RegularExpressions;
+using IBApi;
 
 namespace IBMonitor.Services
 {
@@ -36,6 +37,12 @@ namespace IBMonitor.Services
 
             try
             {
+                // Check for buy commands (B100, B100,4.36, etc.)
+                if (command.StartsWith("b") && command.Length > 1)
+                {
+                    return await HandleBuyCommand(input.Trim());
+                }
+
                 return command switch
                 {
                     "set" => HandleSetCommand(parts),
@@ -177,6 +184,144 @@ namespace IBMonitor.Services
             return $"Break-Even manually triggered for {_config.Symbol}.";
         }
 
+        private async Task<string> HandleBuyCommand(string input)
+        {
+            if (string.IsNullOrEmpty(_config.Symbol))
+                return "No symbol configured. Use 'set symbol <SYMBOL>' first.";
+
+            try
+            {
+                // Parse buy command: B100 or B100,4.36
+                var buyPattern = @"^[bB](\d+)(?:,(\d+\.?\d*))?$";
+                var match = Regex.Match(input, buyPattern);
+                
+                if (!match.Success)
+                    return "Invalid buy command format. Use: B<quantity> or B<quantity>,<price> (e.g., B100 or B100,4.36)";
+
+                var quantityStr = match.Groups[1].Value;
+                var priceStr = match.Groups[2].Value;
+
+                if (!decimal.TryParse(quantityStr, out var quantity) || quantity <= 0)
+                    return "Invalid quantity. Must be a positive number.";
+
+                double? limitPrice = null;
+                if (!string.IsNullOrEmpty(priceStr))
+                {
+                    if (!double.TryParse(priceStr, out var price) || price <= 0)
+                        return "Invalid price. Must be a positive number.";
+                    limitPrice = price;
+                }
+
+                return await ProcessBuyOrder(quantity, limitPrice);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error processing buy command: {Input}", input);
+                return $"Error processing buy command: {ex.Message}";
+            }
+        }
+
+        private async Task<string> ProcessBuyOrder(decimal quantity, double? limitPrice = null)
+        {
+            try
+            {
+                var contract = CreateContract(_config.Symbol!);
+                var orderId = _ibService.GetNextOrderId();
+
+                Order buyOrder;
+                string orderDescription;
+
+                if (limitPrice.HasValue)
+                {
+                    // Limit order with specified price (round according to IB rules)
+                    var roundedLimitPrice = RoundPriceForIB(limitPrice.Value);
+                    buyOrder = CreateBuyLimitOrder(quantity, roundedLimitPrice);
+                    orderDescription = $"Buy Limit: {quantity} shares at ${FormatPrice(roundedLimitPrice)}";
+                }
+                else
+                {
+                    // Market order with ask + offset
+                    var askPrice = _positionService.GetCurrentAskPrice(_config.Symbol!);
+                    if (askPrice <= 0)
+                    {
+                        return "Unable to get current ask price. Market data may not be available.";
+                    }
+
+                    var marketOffset = _config.GetMarketOffsetValue(askPrice);
+                    var calculatedLimitPrice = RoundPriceForIB(askPrice + marketOffset);
+                    
+                    buyOrder = CreateBuyLimitOrder(quantity, calculatedLimitPrice);
+                    orderDescription = $"Buy Limit: {quantity} shares at ${FormatPrice(calculatedLimitPrice)} (Ask: ${FormatPrice(askPrice)} + Offset: ${FormatPrice(marketOffset)})";
+                }
+
+                _ibService.PlaceOrder(orderId, contract, buyOrder);
+
+                _logger.Information("Buy order placed: {Symbol} OrderId:{OrderId} {Description}", 
+                    _config.Symbol, orderId, orderDescription);
+
+                return $"Buy order placed: {orderDescription} (OrderId: {orderId})";
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error placing buy order");
+                return $"Error placing buy order: {ex.Message}";
+            }
+        }
+
+        private Contract CreateContract(string symbol)
+        {
+            return new Contract
+            {
+                Symbol = symbol,
+                SecType = "STK",
+                Currency = "USD",
+                Exchange = "SMART",
+                PrimaryExch = "" // Let IB choose the best exchange
+            };
+        }
+
+        private double RoundPriceForIB(double price)
+        {
+            // IB price rules: Under $1 = 4 decimal places, $1 and above = 2 decimal places
+            if (price < 1.0)
+            {
+                return Math.Round(price, 4);
+            }
+            else
+            {
+                return Math.Round(price, 2);
+            }
+        }
+
+        private string FormatPrice(double price)
+        {
+            // Dynamic formatting: show only necessary decimal places
+            if (price < 1.0)
+            {
+                // For prices under $1, show up to 4 decimals but remove trailing zeros
+                return price.ToString("0.####");
+            }
+            else
+            {
+                // For prices $1 and above, show up to 2 decimals but remove trailing zeros
+                return price.ToString("0.##");
+            }
+        }
+
+        private Order CreateBuyLimitOrder(decimal quantity, double limitPrice)
+        {
+            return new Order
+            {
+                Action = "BUY",
+                OrderType = "LMT",
+                TotalQuantity = quantity,
+                LmtPrice = limitPrice,
+                Tif = "GTC",
+                Transmit = true,
+                OutsideRth = true  // Allow execution outside regular trading hours
+            };
+        }
+
         private string HandleShowCommand(string[] parts)
         {
             if (parts.Length < 2)
@@ -208,6 +353,10 @@ namespace IBMonitor.Services
         {
             return @"Available Commands:
 
+BUY Commands:
+  B<quantity>                            - Buy shares at Ask + MarketOffset (e.g. B100)
+  B<quantity>,<price>                    - Buy shares at specific limit price (e.g. B100,4.36)
+
 SET Commands:
   set stoploss <value>                   - Set stop-loss distance in USD
   set marketoffset <value or percent>    - Set market offset (e.g. 0.05 or 2%)
@@ -221,7 +370,9 @@ SHOW Commands:
 
 GENERAL:
   help                                   - Show this help
-  exit                                   - Exit program";
+  exit                                   - Exit program
+
+Note: Buy orders automatically create stop-loss orders and adjust them based on average cost.";
         }
 
         private string HandleExit()
@@ -241,4 +392,4 @@ GENERAL:
                           .ToArray();
         }
     }
-} 
+}

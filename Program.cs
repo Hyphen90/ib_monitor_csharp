@@ -91,22 +91,19 @@ namespace IBMonitor
 
         private static void OnPositionOpened(Models.PositionInfo position)
         {
-            var message = $"Position opened: {position}";
-            _logger?.Information(message);
+            var message = $"Position opened: {position.Contract.Symbol} - Qty: {position.Quantity}, AvgPrice: {position.AveragePrice:F2}";
             _consoleService?.ShowPositionUpdate(message);
         }
 
         private static void OnPositionClosed(Models.PositionInfo position)
         {
             var message = $"Position closed: {position.Contract.Symbol}";
-            _logger?.Information(message);
             _consoleService?.ShowPositionUpdate(message);
         }
 
         private static void OnPositionChanged(Models.PositionInfo position)
         {
-            var message = $"Position changed: {position}";
-            _logger?.Information(message);
+            var message = $"Position changed: {position.Contract.Symbol} - Qty: {position.Quantity}, AvgPrice: {position.AveragePrice:F2}";
             _consoleService?.ShowPositionUpdate(message);
         }
 
@@ -157,4 +154,4 @@ namespace IBMonitor
             await _shutdownTcs.Task;
         }
     }
-} 
+}
