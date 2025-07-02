@@ -11,6 +11,8 @@ namespace IBMonitor.Services
         private readonly ILogger _logger;
         private readonly MonitorConfig _config;
         private readonly IBConnectionService _ibService;
+        private readonly RealTimeBarService _realTimeBarService;
+        private readonly BarTrailingStopManager _barTrailingStopManager;
         private readonly Dictionary<string, PositionInfo> _positions = new();
         private readonly Dictionary<int, int> _orderToPositionMap = new(); // OrderId -> Position tracking
         private bool _firstPositionDetected = false;
@@ -30,12 +32,20 @@ namespace IBMonitor.Services
             _config = config;
             _ibService = ibService;
 
+            // Initialize bar-based trailing services
+            _realTimeBarService = new RealTimeBarService(_logger, _config, _ibService);
+            _barTrailingStopManager = new BarTrailingStopManager(_logger, _config);
+
             // Subscribe to IB events
             _ibService.PositionUpdate += OnPositionUpdate;
             _ibService.OrderStatusUpdate += OnOrderStatusUpdate;
             _ibService.OpenOrderReceived += OnOpenOrderReceived;
             _ibService.TickPriceReceived += OnTickPriceReceived;
             _ibService.Connected += OnIBConnected;
+            _ibService.RealTimeBarReceived += OnRealTimeBarReceived;
+
+            // Subscribe to real-time bar events
+            _realTimeBarService.RealTimeBarReceived += OnRealTimeBarFromService;
         }
 
         private void OnPositionUpdate(string account, Contract contract, decimal position, double avgCost)
@@ -623,8 +633,19 @@ namespace IBMonitor.Services
             if (_config.Symbol == newSymbol)
                 return;
 
+            var oldSymbol = _config.Symbol;
+
             // Unsubscribe from old symbol
             UnsubscribeFromMarketData();
+
+            // Update real-time bars subscription to new symbol
+            _realTimeBarService.UpdateSymbol(newSymbol);
+
+            // Clear bar history for old symbol
+            if (!string.IsNullOrEmpty(oldSymbol))
+            {
+                _barTrailingStopManager.ClearHistory(oldSymbol);
+            }
 
             // Reset ask and bid prices when changing symbols
             lock (_lockObject)
@@ -642,7 +663,8 @@ namespace IBMonitor.Services
                 SubscribeToMarketData();
             }
 
-            _logger.Information("Symbol updated to {Symbol}, market data subscription refreshed", newSymbol);
+            _logger.Information("Symbol updated from {OldSymbol} to {NewSymbol}, market data and real-time bars subscription refreshed", 
+                oldSymbol ?? "none", newSymbol);
         }
 
         public double GetCurrentAskPrice(string symbol)
@@ -845,9 +867,60 @@ namespace IBMonitor.Services
             }
         }
 
+        private void OnRealTimeBarReceived(int reqId, long date, double open, double high, double low, double close, decimal volume, decimal wap, int count)
+        {
+            // Forward to RealTimeBarService for processing
+            _realTimeBarService.OnRealTimeBar(reqId, date, open, high, low, close, volume, wap, count);
+        }
+
+        private void OnRealTimeBarFromService(int tickerId, Bar bar)
+        {
+            if (!_config.UseBarBasedTrailing || string.IsNullOrEmpty(_config.Symbol))
+                return;
+
+            lock (_lockObject)
+            {
+                var position = GetPosition(_config.Symbol);
+                if (position != null && position.IsLongPosition && position.StopLossOrderId.HasValue)
+                {
+                    // Only process trailing if we have an active stop-loss order
+                    var newStopPrice = _barTrailingStopManager.ProcessNewBar(bar, position);
+                    
+                    if (newStopPrice.HasValue)
+                    {
+                        // Update the stop-loss order with the new trailing stop price
+                        var limitOffset = _config.GetMarketOffsetValue(newStopPrice.Value);
+                        var limitPrice = RoundPriceForIB(newStopPrice.Value - limitOffset);
+                        
+                        ModifyStopLossOrder(position, RoundPriceForIB(newStopPrice.Value), limitPrice);
+                        
+                        _logger.Information("Bar-based trailing stop updated for {Symbol}: New Stop:{NewStop:F2} Limit:{Limit:F2} based on bar Close:{Close:F2}", 
+                            _config.Symbol, newStopPrice.Value, limitPrice, bar.Close);
+                    }
+                }
+                else if (position != null && position.IsLongPosition && !position.StopLossOrderId.HasValue)
+                {
+                    _logger.Debug("Bar-based trailing skipped for {Symbol} - no active stop-loss order (Bar Close:{Close:F2})", 
+                        _config.Symbol, bar.Close);
+                }
+            }
+        }
+
+        public string GetBarTrailingStatus()
+        {
+            if (!_config.UseBarBasedTrailing)
+                return "Bar-based trailing is disabled";
+
+            if (string.IsNullOrEmpty(_config.Symbol))
+                return "No symbol configured for bar-based trailing";
+
+            return _barTrailingStopManager.GetTrailingStopStatus(_config.Symbol);
+        }
+
         public void Dispose()
         {
             UnsubscribeFromMarketData();
+            _realTimeBarService?.Dispose();
         }
     }
 }

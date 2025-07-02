@@ -29,6 +29,7 @@ namespace IBMonitor.Services
         public event Action<int, Contract, Order, OrderState>? OpenOrderReceived;
         public event Action<int, int, string, string>? ErrorReceived;
         public event Action<int, int, double, TickAttrib>? TickPriceReceived;
+        public event Action<int, long, double, double, double, double, decimal, decimal, int>? RealTimeBarReceived;
 
         public int NextOrderId { get; private set; } = 1;
         public bool IsConnected => _isConnected;
@@ -281,6 +282,45 @@ namespace IBMonitor.Services
             }
         }
 
+        public void RequestRealTimeBars(int tickerId, Contract contract, int barSize, string whatToShow, bool useRTH)
+        {
+            if (!_isConnected || _clientSocket == null)
+            {
+                _logger.Warning("Cannot request real-time bars - not connected");
+                return;
+            }
+
+            try
+            {
+                _clientSocket.reqRealTimeBars(tickerId, contract, barSize, whatToShow, useRTH, new List<TagValue>());
+                _logger.Debug("Real-time bars requested for {Symbol} with tickerId {TickerId}, barSize {BarSize}s", 
+                    contract.Symbol, tickerId, barSize);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error requesting real-time bars for {Symbol}", contract.Symbol);
+            }
+        }
+
+        public void CancelRealTimeBars(int tickerId)
+        {
+            if (!_isConnected || _clientSocket == null)
+            {
+                _logger.Warning("Cannot cancel real-time bars - not connected");
+                return;
+            }
+
+            try
+            {
+                _clientSocket.cancelRealTimeBars(tickerId);
+                _logger.Debug("Real-time bars cancelled for tickerId {TickerId}", tickerId);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error cancelling real-time bars for tickerId {TickerId}", tickerId);
+            }
+        }
+
         // EWrapper implementations
         public override void nextValidId(int orderId)
         {
@@ -334,6 +374,20 @@ namespace IBMonitor.Services
             ErrorReceived?.Invoke(id, errorCode, errorMsg, advancedOrderRejectJson);
         }
 
+        public override void realtimeBar(int reqId, long date, double open, double high, double low, double close, decimal volume, decimal wap, int count)
+        {
+            try
+            {
+                _logger.Debug("Real-time bar received: reqId:{ReqId} Date:{Date} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2} V:{Volume}", 
+                    reqId, date, open, high, low, close, volume);
+                RealTimeBarReceived?.Invoke(reqId, date, open, high, low, close, volume, wap, count);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error processing real-time bar for reqId {ReqId}", reqId);
+            }
+        }
+
         public override void connectionClosed()
         {
             _isConnected = false;
@@ -354,4 +408,4 @@ namespace IBMonitor.Services
             _reconnectTimer?.Dispose();
         }
     }
-} 
+}

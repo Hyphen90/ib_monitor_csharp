@@ -37,6 +37,18 @@ namespace IBMonitor.Config
         [JsonProperty("maxshares")]
         public int? MaxShares { get; set; } = null; // null = unlimited
 
+        [JsonProperty("usebarbasedtrailing")]
+        public bool UseBarBasedTrailing { get; set; } = false;
+
+        [JsonProperty("bartrailingoffset")]
+        public double BarTrailingOffset { get; set; } = 0.05;
+
+        [JsonProperty("bartrailingleokback")]
+        public int BarTrailingLookback { get; set; } = 0;
+
+        [JsonProperty("barinterval")]
+        public int BarInterval { get; set; } = 10;
+
         /// <summary>
         /// Parses the MarketOffset string to a double value.
         /// Supports both absolute values (e.g., "0.05") and percentage values (e.g., "2%").
