@@ -155,11 +155,20 @@ namespace IBMonitor.Services
                     }
                 }
 
-                // Reset closing flag when all positions are flat
-                if (_isClosing && _positions.Values.All(p => p.IsFlat))
+                // Reset closing flag and position script flag when all positions are flat
+                if (_positions.Values.All(p => p.IsFlat))
                 {
-                    _isClosing = false;
-                    _logger.Information("Close mode deactivated - all positions are flat");
+                    if (_isClosing)
+                    {
+                        _isClosing = false;
+                        _logger.Information("Close mode deactivated - all positions are flat");
+                    }
+                    
+                    if (_firstPositionDetected)
+                    {
+                        _firstPositionDetected = false;
+                        _logger.Debug("Position script flag reset - ready for next position trigger");
+                    }
                 }
             }
         }
