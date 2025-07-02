@@ -15,7 +15,6 @@ namespace IBMonitor.Services
         private readonly BarTrailingStopManager _barTrailingStopManager;
         private readonly Dictionary<string, PositionInfo> _positions = new();
         private readonly Dictionary<int, int> _orderToPositionMap = new(); // OrderId -> Position tracking
-        private bool _firstPositionDetected = false;
         private readonly object _lockObject = new object();
         private int _marketDataTickerId = -1;
         private const int MARKET_DATA_TICKER_ID = 1000; // Fixed ticker ID for symbol market data
@@ -125,6 +124,10 @@ namespace IBMonitor.Services
                         existingPosition.BreakEvenTriggered = false;
                         CancelExistingOrders(existingPosition);
                         PositionClosed?.Invoke(existingPosition);
+                        
+                        // Remove position from dictionary when flat
+                        _positions.Remove(key);
+                        _logger.Debug("Position {Symbol} removed from tracking - flat position", contract.Symbol);
                     }
                     else if (positionSizeChanged && !isNowFlat)
                     {
@@ -155,20 +158,11 @@ namespace IBMonitor.Services
                     }
                 }
 
-                // Reset closing flag and position script flag when all positions are flat
-                if (_positions.Values.All(p => p.IsFlat))
+                // Reset closing flag when all positions are flat
+                if (_isClosing && _positions.Values.All(p => p.IsFlat))
                 {
-                    if (_isClosing)
-                    {
-                        _isClosing = false;
-                        _logger.Information("Close mode deactivated - all positions are flat");
-                    }
-                    
-                    if (_firstPositionDetected)
-                    {
-                        _firstPositionDetected = false;
-                        _logger.Debug("Position script flag reset - ready for next position trigger");
-                    }
+                    _isClosing = false;
+                    _logger.Information("Close mode deactivated - all positions are flat");
                 }
             }
         }
@@ -412,10 +406,8 @@ namespace IBMonitor.Services
 
         private void ExecutePositionOpenScript(PositionInfo position)
         {
-            if (string.IsNullOrEmpty(_config.PositionOpenScript) || _firstPositionDetected)
+            if (string.IsNullOrEmpty(_config.PositionOpenScript))
                 return;
-
-            _firstPositionDetected = true;
 
             if (!File.Exists(_config.PositionOpenScript))
             {
