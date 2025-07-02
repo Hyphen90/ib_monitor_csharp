@@ -43,11 +43,14 @@ namespace IBMonitor.Config
         [JsonProperty("bartrailingoffset")]
         public double BarTrailingOffset { get; set; } = 0.05;
 
-        [JsonProperty("bartrailingleokback")]
+        [JsonProperty("bartrailinglookback")]
         public int BarTrailingLookback { get; set; } = 0;
 
         [JsonProperty("barinterval")]
         public int BarInterval { get; set; } = 10;
+
+        [JsonProperty("bardebug")]
+        public bool BarDebug { get; set; } = false;
 
         /// <summary>
         /// Parses the MarketOffset string to a double value.

@@ -472,6 +472,15 @@ namespace IBMonitor.Services
             return $"{contract.Symbol}_{contract.SecType}_{contract.Currency}_{contract.Exchange}";
         }
 
+        private string GetBarTimeString(Bar bar)
+        {
+            if (DateTime.TryParseExact(bar.Time, "yyyyMMdd-HH:mm:ss", null, System.Globalization.DateTimeStyles.None, out var barTime))
+            {
+                return barTime.ToString("HH:mm:ss");
+            }
+            return bar.Time;
+        }
+
         public PositionInfo? GetPosition(string symbol)
         {
             lock (_lockObject)
@@ -878,6 +887,12 @@ namespace IBMonitor.Services
         {
             if (!_config.UseBarBasedTrailing || string.IsNullOrEmpty(_config.Symbol))
                 return;
+
+            if (_config.BarDebug)
+            {
+                _logger.Information("BAR FORWARDED TO MANAGER: {Symbol} {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2}", 
+                    _config.Symbol, GetBarTimeString(bar), bar.Open, bar.High, bar.Low, bar.Close);
+            }
 
             lock (_lockObject)
             {

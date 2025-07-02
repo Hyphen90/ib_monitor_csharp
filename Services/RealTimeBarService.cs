@@ -129,8 +129,16 @@ namespace IBMonitor.Services
                 var timestamp = UnixTimestampToDateTime(date);
                 var bar = new Bar(timestamp.ToString("yyyyMMdd-HH:mm:ss"), open, high, low, close, volume, count, wap);
 
-                _logger.Debug("Real-time bar received for {Symbol}: {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2} V:{Volume}", 
-                    symbol, timestamp.ToString("HH:mm:ss"), open, high, low, close, volume);
+                if (_config.BarDebug)
+                {
+                    _logger.Information("RAW BAR RECEIVED: {Symbol} {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2} V:{Volume}", 
+                        symbol, timestamp.ToString("HH:mm:ss"), open, high, low, close, volume);
+                }
+                else
+                {
+                    _logger.Debug("Real-time bar received for {Symbol}: {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2} V:{Volume}", 
+                        symbol, timestamp.ToString("HH:mm:ss"), open, high, low, close, volume);
+                }
 
                 // Notify subscribers
                 RealTimeBarReceived?.Invoke(reqId, bar);

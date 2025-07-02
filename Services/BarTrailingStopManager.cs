@@ -11,6 +11,7 @@ namespace IBMonitor.Services
         private readonly ILogger _logger;
         private readonly MonitorConfig _config;
         private readonly ConcurrentDictionary<string, Queue<Bar>> _barHistory = new();
+        private readonly ConcurrentDictionary<string, Bar> _lastReceivedBar = new();
         private readonly object _lockObject = new object();
 
         public BarTrailingStopManager(ILogger logger, MonitorConfig config)
@@ -28,48 +29,174 @@ namespace IBMonitor.Services
             {
                 var symbol = position.Contract.Symbol;
                 
+                if (_config.BarDebug)
+                {
+                    _logger.Information("BAR PROCESSING START: {Symbol} {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2}", 
+                        symbol, GetBarTimeString(bar), bar.Open, bar.High, bar.Low, bar.Close);
+                }
+                
                 // Initialize bar history for this symbol if needed
                 if (!_barHistory.ContainsKey(symbol))
                 {
                     _barHistory[symbol] = new Queue<Bar>();
                 }
 
-                var barQueue = _barHistory[symbol];
+                // NEW LOGIC: When a new bar arrives, the previous bar is automatically completed
+                // IB only sends new bars when the previous interval is finished
+                double? trailingResult = null;
                 
-                // Add new bar to history
-                barQueue.Enqueue(bar);
+                // Check if we have a previous bar to process as completed
+                if (_lastReceivedBar.ContainsKey(symbol))
+                {
+                    var previousBar = _lastReceivedBar[symbol];
+                    
+                    if (_config.BarDebug)
+                    {
+                        _logger.Information("BAR COMPLETION DETECTED: Previous bar {PrevTime} completed when new bar {NewTime} arrived", 
+                            GetBarTimeString(previousBar), GetBarTimeString(bar));
+                    }
+                    
+                    trailingResult = ProcessCompletedBar(previousBar, position);
+                }
                 
-                // Keep only the required number of bars (lookback + current bar)
-                var maxBars = _config.BarTrailingLookback + 1;
-                while (barQueue.Count > maxBars)
-                {
-                    barQueue.Dequeue();
-                }
-
-                // Check if this bar qualifies for trailing stop update
-                if (!ShouldUpdateTrailingStop(bar, position))
-                {
-                    _logger.Debug("Bar does not qualify for trailing stop update: {Symbol} Close:{Close:F2} Open:{Open:F2} EntryPrice:{EntryPrice:F2}", 
-                        symbol, bar.Close, bar.Open, position.AveragePrice);
-                    return null;
-                }
-
-                // Calculate new trailing stop based on lookback period
-                var newStopPrice = CalculateTrailingStop(barQueue.ToArray());
+                // Store current bar as the new "last received" bar
+                _lastReceivedBar[symbol] = bar;
                 
-                // Only update if new stop is higher than current stop (for long positions)
-                if (position.StopLossPrice.HasValue && newStopPrice <= position.StopLossPrice.Value)
+                if (_config.BarDebug)
                 {
-                    _logger.Debug("New trailing stop {NewStop:F2} is not higher than current stop {CurrentStop:F2} for {Symbol}", 
-                        newStopPrice, position.StopLossPrice.Value, symbol);
-                    return null;
+                    _logger.Debug("Bar stored as current: {Symbol} {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2}", 
+                        symbol, GetBarTimeString(bar), bar.Open, bar.High, bar.Low, bar.Close);
                 }
-
-                _logger.Information("Bar-based trailing stop triggered for {Symbol}: Bar Close:{Close:F2} > Entry:{Entry:F2}, New Stop:{NewStop:F2} (Lookback: {Lookback} bars)", 
-                    symbol, bar.Close, position.AveragePrice, newStopPrice, _config.BarTrailingLookback);
-
-                return newStopPrice;
+                
+                return trailingResult;
             }
+        }
+
+        private double? ProcessCompletedBar(Bar completedBar, PositionInfo position)
+        {
+            var symbol = position.Contract.Symbol;
+            var barQueue = _barHistory[symbol];
+            
+            // Debug output for completed bars
+            if (_config.BarDebug)
+            {
+                _logger.Information("COMPLETED BAR: {Symbol} {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2}", 
+                    symbol, GetBarTimeString(completedBar), completedBar.Open, completedBar.High, completedBar.Low, completedBar.Close);
+            }
+            
+            // Add completed bar to history
+            barQueue.Enqueue(completedBar);
+            
+            // Keep only the required number of bars (lookback + current bar)
+            var maxBars = _config.BarTrailingLookback + 1;
+            while (barQueue.Count > maxBars)
+            {
+                barQueue.Dequeue();
+            }
+
+            // Check if this completed bar qualifies for trailing stop update
+            if (!ShouldUpdateTrailingStop(completedBar, position))
+            {
+                _logger.Debug("Completed bar does not qualify for trailing stop update: {Symbol} Close:{Close:F2} Open:{Open:F2} EntryPrice:{EntryPrice:F2}", 
+                    symbol, completedBar.Close, completedBar.Open, position.AveragePrice);
+                return null;
+            }
+
+            // Calculate new trailing stop based on lookback period
+            var newStopPrice = CalculateTrailingStop(barQueue.ToArray());
+            
+            // Only update if new stop is higher than current stop (for long positions)
+            if (position.StopLossPrice.HasValue && newStopPrice <= position.StopLossPrice.Value)
+            {
+                _logger.Debug("New trailing stop {NewStop:F2} is not higher than current stop {CurrentStop:F2} for {Symbol}", 
+                    newStopPrice, position.StopLossPrice.Value, symbol);
+                return null;
+            }
+
+            _logger.Information("Bar-based trailing stop triggered for {Symbol}: Completed bar Close:{Close:F2} > Entry:{Entry:F2}, New Stop:{NewStop:F2} (Lookback: {Lookback} bars)", 
+                symbol, completedBar.Close, position.AveragePrice, newStopPrice, _config.BarTrailingLookback);
+
+            return newStopPrice;
+        }
+
+        private bool IsBarCompleted(Bar bar)
+        {
+            // Parse bar timestamp (format: "yyyyMMdd-HH:mm:ss")
+            if (!DateTime.TryParseExact(bar.Time, "yyyyMMdd-HH:mm:ss", null, System.Globalization.DateTimeStyles.None, out var barTime))
+            {
+                _logger.Warning("Could not parse bar timestamp: {BarTime}", bar.Time);
+                return false;
+            }
+
+            // Use timezone-resistant MM:SS comparison for bar completion
+            var currentTime = DateTime.Now;
+            
+            // Calculate bar end time in MM:SS format
+            var barEndTime = barTime.AddSeconds(_config.BarInterval);
+            
+            // Extract MM:SS components (timezone-independent)
+            var barEndMinutes = barEndTime.Minute;
+            var barEndSeconds = barEndTime.Second;
+            var currentMinutes = currentTime.Minute;
+            var currentSeconds = currentTime.Second;
+            
+            // Convert to total seconds within the hour for easy comparison
+            var barEndTotalSeconds = barEndMinutes * 60 + barEndSeconds;
+            var currentTotalSeconds = currentMinutes * 60 + currentSeconds;
+            
+            // Handle minute rollover (e.g., bar ends at 00:05, current is 59:55)
+            // If bar end seconds < bar start seconds, it crossed the hour boundary
+            var barStartMinutes = barTime.Minute;
+            var barStartSeconds = barTime.Second;
+            var barStartTotalSeconds = barStartMinutes * 60 + barStartSeconds;
+            
+            bool isCompleted;
+            if (barEndTotalSeconds < barStartTotalSeconds)
+            {
+                // Bar crosses hour boundary (e.g., 59:55 + 10s = 00:05)
+                isCompleted = currentTotalSeconds >= barEndTotalSeconds || currentTotalSeconds < barStartTotalSeconds;
+            }
+            else
+            {
+                // Normal case: bar within same hour
+                isCompleted = currentTotalSeconds >= barEndTotalSeconds;
+            }
+            
+            if (_config.BarDebug && isCompleted)
+            {
+                _logger.Information("BAR COMPLETION DETECTED: Bar {BarStart} -> {BarEnd}, Current {Current} (MM:SS logic)", 
+                    $"{barStartMinutes:D2}:{barStartSeconds:D2}", 
+                    $"{barEndMinutes:D2}:{barEndSeconds:D2}", 
+                    $"{currentMinutes:D2}:{currentSeconds:D2}");
+            }
+            else if (_config.BarDebug)
+            {
+                _logger.Debug("Bar still live: Bar {BarStart} -> {BarEnd}, Current {Current} (waiting for completion)", 
+                    $"{barStartMinutes:D2}:{barStartSeconds:D2}", 
+                    $"{barEndMinutes:D2}:{barEndSeconds:D2}", 
+                    $"{currentMinutes:D2}:{currentSeconds:D2}");
+            }
+
+            return isCompleted;
+        }
+
+        private string GetBarEndTimeString(Bar bar)
+        {
+            if (DateTime.TryParseExact(bar.Time, "yyyyMMdd-HH:mm:ss", null, System.Globalization.DateTimeStyles.None, out var barTime))
+            {
+                var barEndTime = barTime.AddSeconds(_config.BarInterval);
+                return barEndTime.ToString("HH:mm:ss");
+            }
+            return "unknown";
+        }
+
+        private string GetBarTimeString(Bar bar)
+        {
+            if (DateTime.TryParseExact(bar.Time, "yyyyMMdd-HH:mm:ss", null, System.Globalization.DateTimeStyles.None, out var barTime))
+            {
+                return barTime.ToString("HH:mm:ss");
+            }
+            return bar.Time;
         }
 
         private bool ShouldUpdateTrailingStop(Bar bar, PositionInfo position)
@@ -109,8 +236,14 @@ namespace IBMonitor.Services
                 if (_barHistory.ContainsKey(symbol))
                 {
                     _barHistory[symbol].Clear();
-                    _logger.Debug("Cleared bar history for {Symbol}", symbol);
                 }
+                
+                if (_lastReceivedBar.ContainsKey(symbol))
+                {
+                    _lastReceivedBar.TryRemove(symbol, out _);
+                }
+                
+                _logger.Debug("Cleared bar history and last received bar for {Symbol}", symbol);
             }
         }
 
@@ -119,7 +252,8 @@ namespace IBMonitor.Services
             lock (_lockObject)
             {
                 _barHistory.Clear();
-                _logger.Debug("Cleared all bar history");
+                _lastReceivedBar.Clear();
+                _logger.Debug("Cleared all bar history and last received bars");
             }
         }
 
