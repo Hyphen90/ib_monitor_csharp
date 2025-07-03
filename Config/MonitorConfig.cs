@@ -13,8 +13,11 @@ namespace IBMonitor.Config
         [JsonProperty("stoploss")]
         public double StopLoss { get; set; } = 0.20;
 
-        [JsonProperty("marketoffset")]
-        public string? MarketOffset { get; set; } = "2%";
+        [JsonProperty("buyoffset")]
+        public string? BuyOffset { get; set; } = "0.10";
+
+        [JsonProperty("selloffset")]
+        public string? SellOffset { get; set; } = "0.10";
 
         [JsonProperty("breakeven")]
         public double? BreakEven { get; set; }
@@ -53,15 +56,15 @@ namespace IBMonitor.Config
         public bool BarDebug { get; set; } = false;
 
         /// <summary>
-        /// Parses the MarketOffset string to a double value.
+        /// Parses the BuyOffset string to a double value.
         /// Supports both absolute values (e.g., "0.05") and percentage values (e.g., "2%").
         /// </summary>
-        public double GetMarketOffsetValue(double basePrice)
+        public double GetBuyOffsetValue(double basePrice)
         {
-            if (string.IsNullOrEmpty(MarketOffset))
-                return basePrice * 0.02; // Default 2%
+            if (string.IsNullOrEmpty(BuyOffset))
+                return 0.10; // Default 0.10
 
-            var offsetStr = MarketOffset.Trim();
+            var offsetStr = BuyOffset.Trim();
             
             if (offsetStr.EndsWith("%"))
             {
@@ -76,8 +79,36 @@ namespace IBMonitor.Config
                 return absoluteValue;
             }
 
-            // Fallback to 2% if parsing fails
-            return basePrice * 0.02;
+            // Fallback to 0.10 if parsing fails
+            return 0.10;
+        }
+
+        /// <summary>
+        /// Parses the SellOffset string to a double value.
+        /// Supports both absolute values (e.g., "0.05") and percentage values (e.g., "2%").
+        /// </summary>
+        public double GetSellOffsetValue(double basePrice)
+        {
+            if (string.IsNullOrEmpty(SellOffset))
+                return 0.10; // Default 0.10
+
+            var offsetStr = SellOffset.Trim();
+            
+            if (offsetStr.EndsWith("%"))
+            {
+                var percentStr = offsetStr.Substring(0, offsetStr.Length - 1);
+                if (double.TryParse(percentStr, out var percent))
+                {
+                    return basePrice * (percent / 100.0);
+                }
+            }
+            else if (double.TryParse(offsetStr, out var absoluteValue))
+            {
+                return absoluteValue;
+            }
+
+            // Fallback to 0.10 if parsing fails
+            return 0.10;
         }
 
         public override string ToString()

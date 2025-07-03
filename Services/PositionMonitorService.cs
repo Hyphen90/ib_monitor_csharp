@@ -172,7 +172,7 @@ namespace IBMonitor.Services
             if (position.Quantity <= 0) return; // Only for long positions
 
             var stopPrice = RoundPriceForIB(position.AveragePrice - _config.StopLoss);
-            var limitOffset = _config.GetMarketOffsetValue(stopPrice);
+            var limitOffset = _config.GetSellOffsetValue(stopPrice);
             var limitPrice = RoundPriceForIB(stopPrice - limitOffset);
 
             var stopOrder = CreateStopLimitOrder(position.Contract, position.Quantity, stopPrice, limitPrice);
@@ -196,7 +196,7 @@ namespace IBMonitor.Services
 
             // Calculate new stop prices based on updated average price
             var stopPrice = RoundPriceForIB(position.AveragePrice - _config.StopLoss);
-            var limitOffset = _config.GetMarketOffsetValue(stopPrice);
+            var limitOffset = _config.GetSellOffsetValue(stopPrice);
             var limitPrice = RoundPriceForIB(stopPrice - limitOffset);
 
             // If we have an existing order, modify it instead of canceling and recreating
@@ -268,7 +268,7 @@ namespace IBMonitor.Services
             if (position.Quantity <= 0) return; // Only for long positions
 
             var breakEvenPrice = RoundPriceForIB(position.AveragePrice + _config.BreakEvenOffset);
-            var limitOffset = _config.GetMarketOffsetValue(breakEvenPrice);
+            var limitOffset = _config.GetSellOffsetValue(breakEvenPrice);
             var limitPrice = RoundPriceForIB(breakEvenPrice - limitOffset);
 
             // If we have an existing stop-loss order, modify it to break-even instead of canceling
@@ -765,8 +765,8 @@ namespace IBMonitor.Services
 
                         if (totalLongQuantity > 0)
                         {
-                            var marketOffset = _config.GetMarketOffsetValue(bidPrice);
-                            var sellLimitPrice = RoundPriceForIB(bidPrice - marketOffset);
+                            var sellOffset = _config.GetSellOffsetValue(bidPrice);
+                            var sellLimitPrice = RoundPriceForIB(bidPrice - sellOffset);
                             
                             var contract = CreateContract(_config.Symbol);
                             var sellOrder = CreateSellLimitOrder(totalLongQuantity, sellLimitPrice);
@@ -774,7 +774,7 @@ namespace IBMonitor.Services
                             
                             _ibService.PlaceOrder(orderId, contract, sellOrder);
                             
-                            results.Add($"Sell limit order placed to close {totalLongQuantity} shares at ${FormatPrice(sellLimitPrice)} (Bid: ${FormatPrice(bidPrice)} - Offset: ${FormatPrice(marketOffset)}, OrderId: {orderId})");
+                            results.Add($"Sell limit order placed to close {totalLongQuantity} shares at ${FormatPrice(sellLimitPrice)} (Bid: ${FormatPrice(bidPrice)} - SellOffset: ${FormatPrice(sellOffset)}, OrderId: {orderId})");
                             
                             _logger.Information("Sell limit order placed to close positions: {Symbol} OrderId:{OrderId} Qty:{Quantity} Price:{Price}", 
                                 _config.Symbol, orderId, totalLongQuantity, sellLimitPrice);
@@ -905,7 +905,7 @@ namespace IBMonitor.Services
                     if (newStopPrice.HasValue)
                     {
                         // Update the stop-loss order with the new trailing stop price
-                        var limitOffset = _config.GetMarketOffsetValue(newStopPrice.Value);
+                        var limitOffset = _config.GetSellOffsetValue(newStopPrice.Value);
                         var limitPrice = RoundPriceForIB(newStopPrice.Value - limitOffset);
                         
                         ModifyStopLossOrder(position, RoundPriceForIB(newStopPrice.Value), limitPrice);

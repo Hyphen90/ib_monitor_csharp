@@ -3,7 +3,8 @@
   "port": 7497,
   "clientid": 1,
   "stoploss": 0.50,
-  "marketoffset": "0.10",
+  "buyoffset": "0.10",
+  "selloffset": "10%",
   "breakeven": 0.20,
   "breakevenoffset": 0.01,
   "positionopenscript": "positiontrigger.ahk",
@@ -11,7 +12,7 @@
   "maxshares": 500,
   "usebarbasedtrailing": true,
   "bartrailingoffset": 0.05,
-  "bartrailinglookback": 1,
+  "bartrailinglookback": 4,
   "barinterval": 10,
-  "bardebug": true
+  "bardebug": false
 }

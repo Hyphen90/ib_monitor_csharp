@@ -101,7 +101,8 @@ namespace IBMonitor.Services
             return subCommand switch
             {
                 "stoploss" => SetStopLoss(value),
-                "marketoffset" => SetMarketOffset(value),
+                "buyoffset" => SetBuyOffset(value),
+                "selloffset" => SetSellOffset(value),
                 "maxshares" => SetMaxShares(value),
                 "symbol" => SetSymbol(value),
                 "breakeven" => HandleBreakEvenCommand(parts),
@@ -143,24 +144,45 @@ namespace IBMonitor.Services
             return $"StopLoss set to {stopLoss:F2} USD (was: {oldValue:F2} USD)";
         }
 
-        private string SetMarketOffset(string value)
+        private string SetBuyOffset(string value)
         {
-            var oldValue = _config.MarketOffset;
-            _config.MarketOffset = value;
+            var oldValue = _config.BuyOffset;
+            _config.BuyOffset = value;
 
             try
             {
                 // Test parsing
                 var testPrice = 100.0;
-                var testOffset = _config.GetMarketOffsetValue(testPrice);
+                var testOffset = _config.GetBuyOffsetValue(testPrice);
                 
-                _logger.Information("MarketOffset changed from '{OldValue}' to '{NewValue}'", oldValue, value);
-                return $"MarketOffset set to '{value}' (was: '{oldValue}')";
+                _logger.Information("BuyOffset changed from '{OldValue}' to '{NewValue}'", oldValue, value);
+                return $"BuyOffset set to '{value}' (was: '{oldValue}')";
             }
             catch
             {
-                _config.MarketOffset = oldValue; // Rollback
-                return $"Invalid MarketOffset value: {value}. Use absolute values (e.g. 0.05) or percentage (e.g. 2%)";
+                _config.BuyOffset = oldValue; // Rollback
+                return $"Invalid BuyOffset value: {value}. Use absolute values (e.g. 0.05) or percentage (e.g. 2%)";
+            }
+        }
+
+        private string SetSellOffset(string value)
+        {
+            var oldValue = _config.SellOffset;
+            _config.SellOffset = value;
+
+            try
+            {
+                // Test parsing
+                var testPrice = 100.0;
+                var testOffset = _config.GetSellOffsetValue(testPrice);
+                
+                _logger.Information("SellOffset changed from '{OldValue}' to '{NewValue}'", oldValue, value);
+                return $"SellOffset set to '{value}' (was: '{oldValue}')";
+            }
+            catch
+            {
+                _config.SellOffset = oldValue; // Rollback
+                return $"Invalid SellOffset value: {value}. Use absolute values (e.g. 0.05) or percentage (e.g. 2%)";
             }
         }
 
@@ -329,11 +351,11 @@ namespace IBMonitor.Services
                         return "Unable to get current ask price. Market data may not be available.";
                     }
 
-                    var marketOffset = _config.GetMarketOffsetValue(askPrice);
-                    var calculatedLimitPrice = RoundPriceForIB(askPrice + marketOffset);
+                    var buyOffset = _config.GetBuyOffsetValue(askPrice);
+                    var calculatedLimitPrice = RoundPriceForIB(askPrice + buyOffset);
                     
                     buyOrder = CreateBuyLimitOrder(quantity, calculatedLimitPrice);
-                    orderDescription = $"Buy Limit: {quantity} shares at ${FormatPrice(calculatedLimitPrice)} (Ask: ${FormatPrice(askPrice)} + Offset: ${FormatPrice(marketOffset)})";
+                    orderDescription = $"Buy Limit: {quantity} shares at ${FormatPrice(calculatedLimitPrice)} (Ask: ${FormatPrice(askPrice)} + BuyOffset: ${FormatPrice(buyOffset)})";
                 }
 
                 _ibService.PlaceOrder(orderId, contract, buyOrder);
@@ -436,15 +458,16 @@ namespace IBMonitor.Services
             return @"Available Commands:
 
 BUY Commands:
-  B<quantity>                            - Buy shares at Ask + MarketOffset (e.g. B100)
+  B<quantity>                            - Buy shares at Ask + BuyOffset (e.g. B100)
   B<quantity>,<price>                    - Buy shares at specific limit price (e.g. B100,4.36)
 
 CLOSE Commands:
-  C                                      - Cancel all orders and place sell limit at Bid - MarketOffset
+  C                                      - Cancel all orders and place sell limit at Bid - SellOffset
 
 SET Commands:
   set stoploss <value>                   - Set stop-loss distance in USD
-  set marketoffset <value or percent>    - Set market offset (e.g. 0.05 or 2%)
+  set buyoffset <value or percent>       - Set buy offset (e.g. 0.05 or 2%)
+  set selloffset <value or percent>      - Set sell offset (e.g. 0.05 or 2%)
   set maxshares <value or unlimited>     - Set maximum position size (e.g. 500 or unlimited)
   set breakeven trigger <value>          - Set break-even trigger in USD
   set breakeven offset <value>           - Set break-even offset in USD
@@ -460,7 +483,8 @@ GENERAL:
 
 Note: Buy orders automatically create stop-loss orders and adjust them based on average cost.
       The C command is ideal for pre-market use as it uses limit orders instead of market orders.
-      MaxShares prevents exceeding the specified position size across multiple buy orders.";
+      MaxShares prevents exceeding the specified position size across multiple buy orders.
+      BuyOffset is used for entry orders, SellOffset is used for stop-loss and close orders.";
         }
 
         private string HandleExit()
