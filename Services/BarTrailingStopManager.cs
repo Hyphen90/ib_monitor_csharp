@@ -41,31 +41,14 @@ namespace IBMonitor.Services
                     _barHistory[symbol] = new Queue<Bar>();
                 }
 
-                // NEW LOGIC: When a new bar arrives, the previous bar is automatically completed
-                // IB only sends new bars when the previous interval is finished
-                double? trailingResult = null;
-                
-                // Check if we have a previous bar to process as completed
-                if (_lastReceivedBar.ContainsKey(symbol))
-                {
-                    var previousBar = _lastReceivedBar[symbol];
-                    
-                    if (_config.BarDebug)
-                    {
-                        _logger.Information("BAR COMPLETION DETECTED: Previous bar {PrevTime} completed when new bar {NewTime} arrived", 
-                            GetBarTimeString(previousBar), GetBarTimeString(bar));
-                    }
-                    
-                    trailingResult = ProcessCompletedBar(previousBar, position);
-                }
-                
-                // Store current bar as the new "last received" bar
-                _lastReceivedBar[symbol] = bar;
+                // IMMEDIATE PROCESSING: Process the current bar immediately as completed
+                // This eliminates the 10-second delay from waiting for the next bar
+                double? trailingResult = ProcessCompletedBar(bar, position);
                 
                 if (_config.BarDebug)
                 {
-                    _logger.Debug("Bar stored as current: {Symbol} {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2}", 
-                        symbol, GetBarTimeString(bar), bar.Open, bar.High, bar.Low, bar.Close);
+                    _logger.Information("BAR PROCESSED IMMEDIATELY: {Symbol} {Time} - No delay", 
+                        symbol, GetBarTimeString(bar));
                 }
                 
                 return trailingResult;

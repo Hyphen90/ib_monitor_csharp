@@ -13,5 +13,5 @@
   "bartrailingoffset": 0.05,
   "bartrailinglookback": 1,
   "barinterval": 10,
-  "bardebug": false
+  "bardebug": true
 }

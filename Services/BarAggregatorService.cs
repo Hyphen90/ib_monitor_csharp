@@ -177,8 +177,9 @@ namespace IBMonitor.Services
 
         private Bar AggregateBars(Bar first, Bar second)
         {
-            // Use the end time of the second bar as the aggregated bar time
-            var aggregatedTime = second.Time;
+            // Calculate the correct end time for the 10s aggregated bar
+            // The aggregated bar should end 10 seconds after the first bar's start time
+            var aggregatedTime = CalculateAggregatedBarEndTime(first.Time);
             
             // Aggregate OHLC values
             var open = first.Open;
@@ -194,6 +195,19 @@ namespace IBMonitor.Services
             var wap = totalVolume > 0 ? totalValue / totalVolume : (first.WAP + second.WAP) / 2;
 
             return new Bar(aggregatedTime, open, high, low, close, volume, count, wap);
+        }
+
+        private string CalculateAggregatedBarEndTime(string firstBarTime)
+        {
+            if (DateTime.TryParseExact(firstBarTime, "yyyyMMdd-HH:mm:ss", null, System.Globalization.DateTimeStyles.None, out var firstTime))
+            {
+                // Add 10 seconds to get the end time of the aggregated bar
+                var endTime = firstTime.AddSeconds(10);
+                return endTime.ToString("yyyyMMdd-HH:mm:ss");
+            }
+            
+            // Fallback to original time if parsing fails
+            return firstBarTime;
         }
 
         private string GetBarTimeString(Bar bar)
