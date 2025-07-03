@@ -246,7 +246,7 @@ namespace IBMonitor.Services
 
         private void CheckBreakEvenTrigger(PositionInfo position)
         {
-            if (position.Quantity <= 0 || !_config.BreakEven.HasValue || position.BreakEvenTriggered) 
+            if (!_config.UseBreakEven || position.Quantity <= 0 || !_config.BreakEven.HasValue || position.BreakEvenTriggered) 
                 return;
 
             // Break-even should trigger when market price reaches average price + break-even threshold
@@ -614,6 +614,12 @@ namespace IBMonitor.Services
         {
             lock (_lockObject)
             {
+                if (!_config.UseBreakEven)
+                {
+                    _logger.Warning("Break-Even manually triggered for {Symbol} but UseBreakEven is disabled in config", symbol);
+                    return;
+                }
+
                 var position = GetPosition(symbol);
                 if (position != null && position.IsLongPosition && !position.BreakEvenTriggered)
                 {

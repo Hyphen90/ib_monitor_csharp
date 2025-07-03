@@ -113,16 +113,18 @@ namespace IBMonitor.Services
         private string HandleBreakEvenCommand(string[] parts)
         {
             if (parts.Length < 3)
-                return "Invalid 'set breakeven' syntax. Examples: 'set breakeven trigger 100' or 'set breakeven offset 0.02' or 'set breakeven force'";
+                return "Invalid 'set breakeven' syntax. Examples: 'set breakeven enable/disable', 'set breakeven trigger 100', 'set breakeven offset 0.02' or 'set breakeven force'";
 
             var subCommand = parts[2].ToLowerInvariant();
             
             return subCommand switch
             {
+                "enable" => SetBreakEvenEnabled(true),
+                "disable" => SetBreakEvenEnabled(false),
                 "trigger" => parts.Length >= 4 ? SetBreakEvenTrigger(parts[3]) : "Missing value for 'set breakeven trigger'. Example: 'set breakeven trigger 100'",
                 "offset" => parts.Length >= 4 ? SetBreakEvenOffset(parts[3]) : "Missing value for 'set breakeven offset'. Example: 'set breakeven offset 0.02'",
                 "force" => ForceBreakEven(),
-                _ => $"Unknown 'breakeven' command: {subCommand}"
+                _ => $"Unknown 'breakeven' command: {subCommand}. Use: enable, disable, trigger, offset, or force"
             };
         }
 
@@ -240,6 +242,19 @@ namespace IBMonitor.Services
             
             _logger.Information("BreakEven Offset changed from {OldValue} to {NewValue}", oldValue, offset);
             return $"BreakEven Offset set to {offset:F2} USD (was: {oldValue:F2} USD)";
+        }
+
+        private string SetBreakEvenEnabled(bool enabled)
+        {
+            var oldValue = _config.UseBreakEven;
+            _config.UseBreakEven = enabled;
+            
+            _logger.Information("BreakEven functionality changed from {OldValue} to {NewValue}", oldValue, enabled);
+            
+            var status = enabled ? "enabled" : "disabled";
+            var oldStatus = oldValue ? "enabled" : "disabled";
+            
+            return $"BreakEven functionality {status} (was: {oldStatus})";
         }
 
         private string ForceBreakEven()
@@ -469,6 +484,8 @@ SET Commands:
   set buyoffset <value or percent>       - Set buy offset (e.g. 0.05 or 2%)
   set selloffset <value or percent>      - Set sell offset (e.g. 0.05 or 2%)
   set maxshares <value or unlimited>     - Set maximum position size (e.g. 500 or unlimited)
+  set breakeven enable                   - Enable break-even functionality
+  set breakeven disable                  - Disable break-even functionality
   set breakeven trigger <value>          - Set break-even trigger in USD
   set breakeven offset <value>           - Set break-even offset in USD
   set breakeven force                    - Manually trigger break-even

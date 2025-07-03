@@ -55,6 +55,9 @@ namespace IBMonitor.Config
         [JsonProperty("bardebug")]
         public bool BarDebug { get; set; } = false;
 
+        [JsonProperty("usebreakeven")]
+        public bool UseBreakEven { get; set; } = false;
+
         /// <summary>
         /// Parses the BuyOffset string to a double value.
         /// Supports both absolute values (e.g., "0.05") and percentage values (e.g., "2%").
