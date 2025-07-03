@@ -10,6 +10,7 @@ namespace IBMonitor.Services
         private readonly ILogger _logger;
         private readonly MonitorConfig _config;
         private readonly IBConnectionService _ibService;
+        private readonly BarAggregatorService _barAggregator;
         private readonly ConcurrentDictionary<int, string> _activeSubscriptions = new();
         private int _nextTickerId = 2000; // Start from 2000 to avoid conflicts with market data
 
@@ -20,6 +21,10 @@ namespace IBMonitor.Services
             _logger = logger;
             _config = config;
             _ibService = ibService;
+
+            // Initialize bar aggregator for 5s -> 10s conversion
+            _barAggregator = new BarAggregatorService(_logger, _config);
+            _barAggregator.AggregatedBarReady += OnAggregatedBarReady;
 
             // Subscribe to IB connection events
             _ibService.Connected += OnIBConnected;
@@ -131,7 +136,7 @@ namespace IBMonitor.Services
 
                 if (_config.BarDebug)
                 {
-                    _logger.Information("RAW BAR RECEIVED: {Symbol} {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2} V:{Volume}", 
+                    _logger.Information("RAW BAR RECEIVED: {Symbol} {Time} O:{Open:F2} H:{High:F2} L:{Low:F2} C:{Close:F2} V:{Volume} [5s from IB]", 
                         symbol, timestamp.ToString("HH:mm:ss"), open, high, low, close, volume);
                 }
                 else
@@ -140,13 +145,19 @@ namespace IBMonitor.Services
                         symbol, timestamp.ToString("HH:mm:ss"), open, high, low, close, volume);
                 }
 
-                // Notify subscribers
-                RealTimeBarReceived?.Invoke(reqId, bar);
+                // Send raw 5s bar to aggregator for 10s conversion
+                _barAggregator.ProcessRawBar(reqId, bar, symbol);
             }
             catch (Exception ex)
             {
                 _logger.Error(ex, "Error processing real-time bar for tickerId {TickerId}", reqId);
             }
+        }
+
+        private void OnAggregatedBarReady(int tickerId, Bar aggregatedBar)
+        {
+            // Forward aggregated 10s bar to subscribers
+            RealTimeBarReceived?.Invoke(tickerId, aggregatedBar);
         }
 
         private Contract CreateContract(string symbol)
@@ -169,6 +180,12 @@ namespace IBMonitor.Services
 
         public void UpdateSymbol(string newSymbol)
         {
+            // Clear aggregation state for old symbol
+            if (!string.IsNullOrEmpty(_config.Symbol))
+            {
+                _barAggregator.ClearState(_config.Symbol);
+            }
+
             // Unsubscribe from all current subscriptions
             UnsubscribeAll();
 

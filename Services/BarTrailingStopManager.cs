@@ -87,9 +87,8 @@ namespace IBMonitor.Services
             // Add completed bar to history
             barQueue.Enqueue(completedBar);
             
-            // Keep only the required number of bars (lookback + current bar)
-            var maxBars = _config.BarTrailingLookback + 1;
-            while (barQueue.Count > maxBars)
+            // Keep only the required number of bars for lookback
+            while (barQueue.Count > _config.BarTrailingLookback)
             {
                 barQueue.Dequeue();
             }
@@ -97,19 +96,28 @@ namespace IBMonitor.Services
             // Check if this completed bar qualifies for trailing stop update
             if (!ShouldUpdateTrailingStop(completedBar, position))
             {
-                _logger.Debug("Completed bar does not qualify for trailing stop update: {Symbol} Close:{Close:F2} Open:{Open:F2} EntryPrice:{EntryPrice:F2}", 
-                    symbol, completedBar.Close, completedBar.Open, position.AveragePrice);
+                if (_config.BarDebug)
+                {
+                    _logger.Information("Completed bar does not qualify for trailing stop update: {Symbol} Close:{Close:F2} Open:{Open:F2} EntryPrice:{EntryPrice:F2}", 
+                        symbol, completedBar.Close, completedBar.Open, position.AveragePrice);
+                }
                 return null;
             }
 
             // Calculate new trailing stop based on lookback period
-            var newStopPrice = CalculateTrailingStop(barQueue.ToArray());
+            // Use only the last BarTrailingLookback bars for calculation
+            var allBars = barQueue.ToArray();
+            var barsForCalculation = allBars.Skip(Math.Max(0, allBars.Length - _config.BarTrailingLookback)).ToArray();
+            var newStopPrice = CalculateTrailingStop(barsForCalculation);
             
             // Only update if new stop is higher than current stop (for long positions)
             if (position.StopLossPrice.HasValue && newStopPrice <= position.StopLossPrice.Value)
             {
-                _logger.Debug("New trailing stop {NewStop:F2} is not higher than current stop {CurrentStop:F2} for {Symbol}", 
-                    newStopPrice, position.StopLossPrice.Value, symbol);
+                if (_config.BarDebug)
+                {
+                    _logger.Information("New trailing stop {NewStop:F2} is not higher than current stop {CurrentStop:F2} for {Symbol}", 
+                        newStopPrice, position.StopLossPrice.Value, symbol);
+                }
                 return null;
             }
 
@@ -201,13 +209,31 @@ namespace IBMonitor.Services
 
         private bool ShouldUpdateTrailingStop(Bar bar, PositionInfo position)
         {
-            // Bar must close positive (close > open)
+            // Bar must close positive (close > open) - strict greater than
             if (bar.Close <= bar.Open)
+            {
+                if (_config.BarDebug)
+                {
+                    _logger.Debug("Bar rejected: Close {Close:F4} <= Open {Open:F4} (not positive)", bar.Close, bar.Open);
+                }
                 return false;
+            }
 
-            // Bar must close above entry price
+            // Bar must close above entry price - strict greater than
             if (bar.Close <= position.AveragePrice)
+            {
+                if (_config.BarDebug)
+                {
+                    _logger.Debug("Bar rejected: Close {Close:F4} <= Entry {Entry:F4} (not above entry)", bar.Close, position.AveragePrice);
+                }
                 return false;
+            }
+
+            if (_config.BarDebug)
+            {
+                _logger.Information("Bar qualifies for trailing stop: Close {Close:F4} > Open {Open:F4} AND Close > Entry {Entry:F4}", 
+                    bar.Close, bar.Open, position.AveragePrice);
+            }
 
             return true;
         }
