@@ -80,6 +80,7 @@ namespace IBMonitor.Services
                     "show" => HandleShowCommand(parts),
                     "help" => ShowHelp(),
                     "exit" => HandleExit(),
+                    _ when command.StartsWith("c") && command.Length > 1 => await HandleConditionalCloseCommand(input.Trim()),
                     _ => "Unknown command. Use 'help' for assistance."
                 };
             }
@@ -277,6 +278,9 @@ namespace IBMonitor.Services
         {
             try
             {
+                // Reset any active take-profit trigger before manual close
+                _positionService.ResetTakeProfitTrigger();
+                
                 var result = await _positionService.CloseAllPositionsAndSetSellOrder();
                 _logger.Information("Close command executed: {Result}", result);
                 return result;
@@ -285,6 +289,50 @@ namespace IBMonitor.Services
             {
                 _logger.Error(ex, "Error executing close command");
                 return $"Error executing close command: {ex.Message}";
+            }
+        }
+
+        private async Task<string> HandleConditionalCloseCommand(string input)
+        {
+            if (string.IsNullOrEmpty(_config.Symbol))
+                return "No symbol configured. Use 'set symbol <SYMBOL>' first.";
+
+            try
+            {
+                // Parse conditional close command: C5.43
+                var closePattern = @"^[cC](\d+\.?\d*)$";
+                var match = Regex.Match(input, closePattern);
+                
+                if (!match.Success)
+                    return "Invalid conditional close command format. Use: C<price> (e.g., C5.43)";
+
+                var priceStr = match.Groups[1].Value;
+
+                if (!double.TryParse(priceStr, out var targetPrice) || targetPrice <= 0)
+                    return "Invalid target price. Must be a positive number.";
+
+                // Check if we have an open position
+                var position = _positionService.GetPosition(_config.Symbol);
+                if (position == null || position.IsFlat)
+                    return $"No open position found for {_config.Symbol}. Take-profit can only be set with an active position.";
+
+                // Check if target price is higher than current market price (take-profit logic)
+                var currentPrice = position.MarketPrice;
+                if (currentPrice > 0 && targetPrice <= currentPrice)
+                {
+                    return $"Take-profit price {targetPrice:F2} must be higher than current market price {currentPrice:F2}. Use regular 'C' command for immediate close.";
+                }
+
+                // Set take-profit trigger
+                var result = _positionService.SetTakeProfitTrigger(_config.Symbol, targetPrice);
+                
+                _logger.Information("Conditional close command set: {Symbol} Target:{TargetPrice:F2}", _config.Symbol, targetPrice);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error processing conditional close command: {Input}", input);
+                return $"Error processing conditional close command: {ex.Message}";
             }
         }
 
@@ -444,15 +492,35 @@ namespace IBMonitor.Services
         private string HandleShowCommand(string[] parts)
         {
             if (parts.Length < 2)
-                return "Invalid 'show' syntax. Examples: show config";
+                return "Invalid 'show' syntax. Examples: show config, show takeprofit";
 
             var subCommand = string.Join(" ", parts.Skip(1)).ToLowerInvariant();
 
             return subCommand switch
             {
                 "config" => ShowConfig(),
+                "takeprofit" => ShowTakeProfitStatus(),
                 _ => $"Unknown 'show' command: {subCommand}"
             };
+        }
+
+        private string ShowTakeProfitStatus()
+        {
+            if (string.IsNullOrEmpty(_config.Symbol))
+                return "No symbol configured.";
+
+            var position = _positionService.GetPosition(_config.Symbol);
+            if (position == null || position.IsFlat)
+                return $"No open position found for {_config.Symbol}.";
+
+            if (position.TakeProfitActive && position.TakeProfitPrice.HasValue)
+            {
+                return $"Take-profit active for {_config.Symbol}: Target price ${position.TakeProfitPrice.Value:F2} (Current: ${position.MarketPrice:F2})";
+            }
+            else
+            {
+                return $"No take-profit trigger set for {_config.Symbol} (Current: ${position.MarketPrice:F2})";
+            }
         }
 
 
@@ -478,6 +546,7 @@ BUY Commands:
 
 CLOSE Commands:
   C                                      - Cancel all orders and place sell limit at Bid - SellOffset
+  C<price>                               - Set take-profit trigger at target price (e.g. C5.43)
 
 SET Commands:
   set stoploss <value>                   - Set stop-loss distance in USD
@@ -493,6 +562,7 @@ SET Commands:
 
 SHOW Commands:
   show config                            - Display current configuration
+  show takeprofit                        - Display take-profit trigger status
 
 GENERAL:
   help                                   - Show this help
@@ -500,6 +570,7 @@ GENERAL:
 
 Note: Buy orders automatically create stop-loss orders and adjust them based on average cost.
       The C command is ideal for pre-market use as it uses limit orders instead of market orders.
+      Take-profit (C<price>) automatically executes the same close routine when target price is reached.
       MaxShares prevents exceeding the specified position size across multiple buy orders.
       BuyOffset is used for entry orders, SellOffset is used for stop-loss and close orders.";
         }

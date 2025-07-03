@@ -25,6 +25,10 @@ namespace IBMonitor.Models
         public int? BreakEvenOrderId { get; set; }
         public bool BreakEvenTriggered { get; set; }
         public double? BreakEvenTriggerPrice { get; set; }
+        
+        // Take-Profit tracking
+        public double? TakeProfitPrice { get; set; }
+        public bool TakeProfitActive { get; set; }
 
         public bool IsLongPosition => Quantity > 0;
         public bool IsFlat => Quantity == 0;
@@ -34,4 +38,4 @@ namespace IBMonitor.Models
             return $"{Contract.Symbol} - Qty: {Quantity}, AvgPrice: {AveragePrice:F2}, Market: {MarketPrice:F2}, PnL: {UnrealizedPnL:F2}";
         }
     }
-} 
+}

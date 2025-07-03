@@ -557,8 +557,17 @@ namespace IBMonitor.Services
                                 _config.Symbol, oldPrice, price);
                         }
 
-                        // Check break-even trigger on every price update
-                        CheckBreakEvenTrigger(position);
+                        // Check take-profit trigger first (higher priority than break-even)
+                        if (position.TakeProfitActive && position.TakeProfitPrice.HasValue && price >= position.TakeProfitPrice.Value)
+                        {
+                            // Trigger take-profit close
+                            TriggerTakeProfitClose(position, price);
+                        }
+                        else
+                        {
+                            // Check break-even trigger on every price update (only if take-profit not triggered)
+                            CheckBreakEvenTrigger(position);
+                        }
                     }
                 }
             }
@@ -668,6 +677,9 @@ namespace IBMonitor.Services
             {
                 _currentAskPrice = 0.0;
                 _currentBidPrice = 0.0;
+                
+                // Reset take-profit trigger when changing symbols
+                ResetTakeProfitTrigger();
             }
 
             // Update configuration
@@ -937,6 +949,70 @@ namespace IBMonitor.Services
                 return "No symbol configured for bar-based trailing";
 
             return _barTrailingStopManager.GetTrailingStopStatus(_config.Symbol);
+        }
+
+        public string SetTakeProfitTrigger(string symbol, double targetPrice)
+        {
+            lock (_lockObject)
+            {
+                var position = GetPosition(symbol);
+                if (position == null || position.IsFlat)
+                    return $"No open position found for {symbol}. Take-profit can only be set with an active position.";
+
+                // Reset any existing take-profit trigger first
+                ResetTakeProfitTrigger();
+
+                // Set new take-profit trigger
+                position.TakeProfitPrice = targetPrice;
+                position.TakeProfitActive = true;
+
+                _logger.Information("Take-profit trigger set for {Symbol}: Target price {TargetPrice:F2}", symbol, targetPrice);
+                return $"Take-profit trigger set for {symbol} at ${targetPrice:F2}. Position will be closed when market price reaches this level.";
+            }
+        }
+
+        public void ResetTakeProfitTrigger()
+        {
+            lock (_lockObject)
+            {
+                var hadActiveTrigger = false;
+                foreach (var position in _positions.Values)
+                {
+                    if (position.TakeProfitActive)
+                    {
+                        hadActiveTrigger = true;
+                        _logger.Information("Take-profit trigger reset for {Symbol} (was: {TargetPrice:F2})", 
+                            position.Contract.Symbol, position.TakeProfitPrice ?? 0);
+                    }
+                    position.TakeProfitPrice = null;
+                    position.TakeProfitActive = false;
+                }
+                
+                if (hadActiveTrigger)
+                {
+                    _logger.Information("Take-profit trigger reset to default state");
+                }
+            }
+        }
+
+        private async void TriggerTakeProfitClose(PositionInfo position, double currentPrice)
+        {
+            try
+            {
+                _logger.Information("Take-profit triggered for {Symbol} at price {CurrentPrice:F2} (target: {TargetPrice:F2})", 
+                    position.Contract.Symbol, currentPrice, position.TakeProfitPrice ?? 0);
+
+                // Reset take-profit trigger before executing close
+                ResetTakeProfitTrigger();
+
+                // Execute the same close routine as manual close command
+                var result = await CloseAllPositionsAndSetSellOrder();
+                _logger.Information("Take-profit close executed: {Result}", result);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error executing take-profit close for {Symbol}", position.Contract.Symbol);
+            }
         }
 
         public void Dispose()
