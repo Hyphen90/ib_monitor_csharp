@@ -1,3 +1,108 @@
+# ⚠️ DISCLAIMER & RISK WARNING ⚠️
+
+## 🚨 WICHTIGER HAFTUNGSAUSSCHLUSS / IMPORTANT LIABILITY DISCLAIMER 🚨
+
+**VERWENDUNG AUF EIGENE GEFAHR - USE AT YOUR OWN RISK**
+
+### 🇩🇪 DEUTSCH
+**DIESE SOFTWARE WIRD OHNE JEGLICHE GEWÄHRLEISTUNG BEREITGESTELLT. DER AUTOR/ENTWICKLER (ANSÄSSIG IN DEUTSCHLAND) ÜBERNIMMT KEINERLEI HAFTUNG FÜR VERLUSTE, SCHÄDEN ODER ANDERE FOLGEN, DIE DURCH DIE NUTZUNG DIESER SOFTWARE ENTSTEHEN.**
+
+### 🇺🇸 ENGLISH
+**THIS SOFTWARE IS PROVIDED WITHOUT ANY WARRANTY. THE AUTHOR/DEVELOPER (BASED IN GERMANY) ASSUMES NO LIABILITY FOR LOSSES, DAMAGES, OR OTHER CONSEQUENCES ARISING FROM THE USE OF THIS SOFTWARE.**
+
+---
+
+## ⚠️ TRADING RISKS / HANDELSRISIKEN
+
+### Financial Risk / Finanzielle Risiken
+- **TOTAL LOSS POSSIBLE**: Automated trading can result in substantial financial losses, including total loss of invested capital
+- **TOTALVERLUST MÖGLICH**: Automatisiertes Trading kann zu erheblichen finanziellen Verlusten bis hin zum Totalverlust führen
+- **Market Volatility**: Financial markets are highly volatile and unpredictable
+- **Leverage Risk**: Trading with leverage amplifies both profits and losses
+
+### Technical Risk / Technische Risiken
+- **EXPERIMENTAL SOFTWARE**: This is beta/experimental software that may contain bugs, errors, or unexpected behavior
+- **API Failures**: Interactive Brokers API connections may fail, causing missed orders or unintended positions
+- **Network Issues**: Internet connectivity problems can disrupt trading operations
+- **System Failures**: Computer crashes, power outages, or software malfunctions may occur at critical moments
+
+---
+
+## 🚫 NO FINANCIAL ADVICE / KEINE ANLAGEBERATUNG
+
+### Investment Advisory Disclaimer
+- **NOT INVESTMENT ADVICE**: This software does not provide investment, financial, or trading advice
+- **KEINE ANLAGEBERATUNG**: Diese Software stellt keine Anlage-, Finanz- oder Handelsberatung dar
+- **No Recommendations**: No buy/sell recommendations are provided
+- **Personal Responsibility**: All trading decisions are solely your responsibility
+
+### Professional Consultation
+- **Seek Professional Advice**: Consult qualified financial advisors before making investment decisions
+- **Due Diligence**: Conduct your own research and analysis
+- **Risk Assessment**: Evaluate your risk tolerance and financial situation
+
+---
+
+## 🌍 INTERNATIONAL COMPLIANCE / INTERNATIONALE COMPLIANCE
+
+### Regulatory Responsibility / Regulatorische Verantwortung
+- **Local Laws**: Users are responsible for compliance with local financial regulations
+- **EU Regulations**: MiFID II, ESMA guidelines may apply to EU users
+- **US Regulations**: SEC, FINRA, CFTC rules may apply to US users
+- **Other Jurisdictions**: Comply with your local financial authority requirements
+
+### Licensing Requirements / Lizenzanforderungen
+- **Professional Trading**: Professional traders may require licenses or registrations
+- **Retail vs. Professional**: Understand your classification under local regulations
+- **Cross-Border Trading**: International trading may have additional compliance requirements
+
+---
+
+## ⚖️ LIABILITY LIMITATION / HAFTUNGSBESCHRÄNKUNG
+
+### Complete Disclaimer / Vollständiger Haftungsausschluss
+**THE AUTHOR, DEVELOPER, AND ANY CONTRIBUTORS DISCLAIM ALL LIABILITY FOR:**
+- Trading losses or missed profits
+- Software bugs, errors, or malfunctions
+- Data loss or corruption
+- System downtime or unavailability
+- Incorrect calculations or order executions
+- Any direct, indirect, incidental, or consequential damages
+
+**DER AUTOR, ENTWICKLER UND ALLE MITWIRKENDEN SCHLIESSEN JEDE HAFTUNG AUS FÜR:**
+- Handelsverluste oder entgangene Gewinne
+- Software-Bugs, Fehler oder Störungen
+- Datenverlust oder -beschädigung
+- Systemausfälle oder Nichtverfügbarkeit
+- Falsche Berechnungen oder Orderausführungen
+- Alle direkten, indirekten, zufälligen oder Folgeschäden
+
+---
+
+## 🧪 SOFTWARE STATUS / SOFTWARE-STATUS
+
+### Development Stage / Entwicklungsstadium
+- **EXPERIMENTAL**: This software is in experimental/beta stage
+- **No Warranty**: No warranty of merchantability or fitness for purpose
+- **Use in Production**: Not recommended for production trading without extensive testing
+- **Paper Trading**: Strongly recommended to test in paper trading environment first
+
+### User Responsibility / Benutzerverantwortung
+- **Testing Required**: Thoroughly test all functionality before live trading
+- **Monitoring**: Continuously monitor software behavior during operation
+- **Backup Plans**: Have manual trading procedures as backup
+- **Risk Management**: Implement proper risk management strategies
+
+---
+
+## ✅ ACKNOWLEDGMENT / BESTÄTIGUNG
+
+**BY USING THIS SOFTWARE, YOU ACKNOWLEDGE THAT YOU HAVE READ, UNDERSTOOD, AND AGREE TO ALL TERMS OF THIS DISCLAIMER.**
+
+**DURCH DIE NUTZUNG DIESER SOFTWARE BESTÄTIGEN SIE, DASS SIE ALLE BEDINGUNGEN DIESES HAFTUNGSAUSSCHLUSSES GELESEN, VERSTANDEN UND AKZEPTIERT HABEN.**
+
+---
+
 # IB Position Monitor
 
 A fully reactive C# program for automatic monitoring of trading positions via the Interactive Brokers API (TWS/IB Gateway). The program automatically sets stop-loss orders and can manage break-even stops - exclusively for long positions.
@@ -256,4 +361,4 @@ This software is provided as-is for educational and personal use. Use at your ow
 
 ## Disclaimer
 
-**Trading Risk Warning**: Automated trading involves significant risk. This software is provided for educational purposes only. Always test thoroughly in a paper trading environment before using with real money. Past performance does not guarantee future results. 
+**Trading Risk Warning**: Automated trading involves significant risk. This software is provided for educational purposes only. Always test thoroughly in a paper trading environment before using with real money. Past performance does not guarantee future results.
