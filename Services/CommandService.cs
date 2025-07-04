@@ -263,6 +263,12 @@ namespace IBMonitor.Services
             if (string.IsNullOrEmpty(_config.Symbol))
                 return "No symbol configured. Use 'set symbol <SYMBOL>' first.";
 
+            if (!_config.UseBreakEven)
+                return "Break-Even functionality is disabled. Use 'set breakeven enable' first.";
+
+            if (!_config.BreakEven.HasValue)
+                return "Break-Even trigger value is not configured. Use 'set breakeven trigger <value>' first.";
+
             var position = _positionService.GetPosition(_config.Symbol);
             if (position == null || position.IsFlat)
                 return $"No open position found for {_config.Symbol}.";
@@ -270,8 +276,16 @@ namespace IBMonitor.Services
             if (position.BreakEvenTriggered)
                 return $"Break-Even already triggered for {_config.Symbol}.";
 
+            // Check if break-even condition is met before forcing
+            var triggerPrice = position.AveragePrice + _config.BreakEven.Value;
+            
+            if (position.MarketPrice < triggerPrice)
+            {
+                return $"Break-Even force rejected for {_config.Symbol}. Market price {position.MarketPrice:F2} is below trigger price {triggerPrice:F2} (AvgPrice {position.AveragePrice:F2} + BreakEven {_config.BreakEven.Value:F2}). Break-Even can only be forced when market price >= trigger price.";
+            }
+
             _positionService.ForceBreakEven(_config.Symbol);
-            return $"Break-Even manually triggered for {_config.Symbol}.";
+            return $"Break-Even manually triggered for {_config.Symbol}. Market: {position.MarketPrice:F2}, Trigger: {triggerPrice:F2}";
         }
 
         private async Task<string> HandleCloseCommand()
