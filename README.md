@@ -112,7 +112,11 @@ A fully reactive C# program for automatic monitoring of trading positions via th
 - ✅ **Fully Event-based**: No polling, only reacting to IB API events
 - ✅ **Automatic Stop-Loss Orders**: Set immediately when position is opened
 - ✅ **Break-Even Management**: Automatic movement to break-even on profit
+- ✅ **Bar-Based Trailing Stops**: Advanced trailing stop using real-time bar data
 - ✅ **Dynamic Adjustment**: Stop-loss updated when average price changes
+- ✅ **Position Size Limits**: Maximum shares protection with configurable limits
+- ✅ **Take-Profit Triggers**: Set conditional close orders at target prices
+- ✅ **Buy/Sell Order Management**: Separate offsets for entry and exit orders
 - ✅ **JSON Configuration**: All settings controllable via config.json
 - ✅ **Named Pipe Interface**: External control via \\.\pipe\ibmonitor
 - ✅ **Console Interface**: Interactive commands directly in the program
@@ -140,16 +144,24 @@ Create a `config.json` file in the execution directory:
 
 ```json
 {
+  "symbol": "AAPL",
   "port": 7497,
   "clientid": 1,
   "stoploss": 0.20,
-  "marketoffset": "2%",
+  "buyoffset": "0.10",
+  "selloffset": "2%",
+  "usebreakeven": true,
   "breakeven": 100.0,
   "breakevenoffset": 0.01,
-  "symbol": "AAPL",
-  "positionopenscript": "C:\\Scripts\\position_opened.bat",
+  "positionopenscript": "positiontrigger.ahk",
   "loglevel": "INFO",
-  "logfile": true
+  "logfile": true,
+  "maxshares": 500,
+  "usebarbasedtrailing": true,
+  "bartrailingoffset": 0.05,
+  "bartrailinglookback": 2,
+  "barinterval": 10,
+  "bardebug": false
 }
 ```
 
@@ -157,16 +169,24 @@ Create a `config.json` file in the execution directory:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `symbol` | string | null | **Required**: Ticker symbol to monitor |
 | `port` | int | 7497 | TCP port for IB Gateway/TWS connection |
 | `clientid` | int | 1 | Client ID for IB connection |
 | `stoploss` | double | 0.20 | Stop-loss distance in USD below average price |
-| `marketoffset` | string | "2%" | Limit offset for stop-limit orders (absolute or %) |
+| `buyoffset` | string | "0.10" | Buy order offset above ask price (absolute or %) |
+| `selloffset` | string | "0.10" | Sell order offset below bid price (absolute or %) |
+| `usebreakeven` | bool | false | Enable/disable break-even functionality |
 | `breakeven` | double? | null | Profit threshold in USD for break-even trigger |
 | `breakevenoffset` | double | 0.01 | Break-even stop markup above average price |
-| `symbol` | string | null | **Required**: Ticker symbol to monitor |
-| `positionopenscript` | string? | null | Path to script for position opening |
+| `positionopenscript` | string? | null | Path to script executed when position opens |
 | `loglevel` | string | "INFO" | Log level: TRACE, DEBUG, INFO, WARN, ERROR |
 | `logfile` | bool | false | Additional output to log file |
+| `maxshares` | int? | null | Maximum position size (null = unlimited) |
+| `usebarbasedtrailing` | bool | false | Enable bar-based trailing stop functionality |
+| `bartrailingoffset` | double | 0.05 | Trailing stop offset in USD from bar highs |
+| `bartrailinglookback` | int | 0 | Number of bars to look back for trailing calculation |
+| `barinterval` | int | 10 | Bar interval in seconds for real-time data |
+| `bardebug` | bool | false | Enable detailed bar processing debug output |
 
 ## Usage
 
@@ -182,46 +202,64 @@ or run the compiled .exe directly.
 
 After startup, commands can be entered directly in the console:
 
+#### BUY Commands
+
+```bash
+# Buy shares at Ask + BuyOffset
+B100                                   # Buy 100 shares at market + offset
+
+# Buy shares at specific limit price
+B100,4.36                             # Buy 100 shares at $4.36 limit price
+B250,12.50                            # Buy 250 shares at $12.50 limit price
+```
+
+#### CLOSE Commands
+
+```bash
+# Immediate close - cancel all orders and sell at Bid - SellOffset
+C                                     # Close all positions immediately
+
+# Conditional close - set take-profit trigger
+C5.43                                 # Set take-profit trigger at $5.43
+C12.75                                # Set take-profit trigger at $12.75
+```
+
 #### SET Commands
 
 ```bash
-# Change stop-loss distance
-set stoploss 0.25
+# Stop-loss and offsets
+set stoploss 0.25                     # Set stop-loss distance in USD
+set buyoffset 0.10                    # Set buy offset (absolute)
+set buyoffset 2%                      # Set buy offset (percentage)
+set selloffset 0.05                   # Set sell offset (absolute)
+set selloffset 3%                     # Set sell offset (percentage)
 
-# Change market offset (absolute or percentage)
-set marketoffset 0.05
-set marketoffset 3%
+# Position limits
+set maxshares 500                     # Set maximum position size
+set maxshares unlimited               # Remove position size limit
 
-# Set break-even trigger
-set breakeven trigger 150.0
+# Break-even management
+set breakeven enable                  # Enable break-even functionality
+set breakeven disable                 # Disable break-even functionality
+set breakeven trigger 100.0           # Set break-even trigger in USD
+set breakeven offset 0.02             # Set break-even offset in USD
+set breakeven force                   # Manually trigger break-even
 
-# Change break-even offset
-set breakeven offset 0.02
-
-# Manually trigger break-even
-set breakeven force
-
-# Change monitored symbol
-set symbol TSLA
+# Symbol configuration
+set symbol AAPL                      # Change monitored symbol
+set symbol TSLA                      # Switch to different symbol
 ```
 
 #### SHOW Commands
 
 ```bash
-# Display current positions
-show positions
+# Display information
+show config                           # Display current configuration
+show takeprofit                       # Display take-profit trigger status
 
-# Display current configuration
-show config
-
-# Display account status
-show account
-
-# Show help
-help
-
-# Exit program
-exit
+# General commands
+help                                  # Show command help
+exit                                  # Exit program
 ```
 
 ### Named Pipe Interface
@@ -286,6 +324,33 @@ Example:
 Break-Even triggered when: (Market Price - Average Price) × Quantity ≥ BreakEven
 New Stop Price = Average Price + BreakEvenOffset
 ```
+
+### Bar-Based Trailing Stop Logic
+
+When `usebarbasedtrailing` is enabled, the system uses real-time bar data to create more sophisticated trailing stops:
+
+```
+Trailing Stop Price = Highest Bar High (within lookback period) - BarTrailingOffset
+```
+
+**Configuration Parameters:**
+- `bartrailingoffset`: Distance in USD below the highest bar high
+- `bartrailinglookback`: Number of completed bars to analyze (0 = current bar only)
+- `barinterval`: Bar duration in seconds (e.g., 10 = 10-second bars)
+- `bardebug`: Enable detailed logging of bar processing
+
+**Example:**
+- Bar Interval: 10 seconds
+- Lookback: 2 bars
+- Trailing Offset: $0.05
+- Recent bar highs: $100.50, $100.75, $100.90 (current)
+- Trailing Stop: $100.85 ($100.90 - $0.05)
+
+**Advantages over traditional trailing:**
+- Uses actual price action structure (bar highs)
+- Reduces noise from tick-by-tick fluctuations
+- More stable trailing behavior
+- Configurable lookback for trend analysis
 
 ## Logging
 
