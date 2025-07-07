@@ -42,15 +42,22 @@
     <Error Condition="!Exists('$(IBClientPath)')" 
            Text="IBClient path does not exist: $(IBClientPath)&#xA;Please run setup again or update IBClientConfig.json" />
     
-    <Message Text="Using IBClient from: $(IBClientPath)" Importance="normal" />
+    <Message Text="Using IBClient from: &quot;$(IBClientPath)&quot;" Importance="normal" />
+    
+    <!-- Find all CS files in IBClient directory, excluding obj and bin -->
+    <ItemGroup>
+      <IBClientCsFiles Include="$(IBClientPath)\*.cs" />
+      <IBClientCsFiles Remove="$(IBClientPath)\obj\**\*.cs" />
+      <IBClientCsFiles Remove="$(IBClientPath)\bin\**\*.cs" />
+    </ItemGroup>
+    
+    <!-- Add IBClient files to compilation -->
+    <ItemGroup>
+      <Compile Include="@(IBClientCsFiles)" />
+    </ItemGroup>
+    
+    <Message Text="Added IBClient source files to compilation" Importance="normal" />
   </Target>
-
-  <!-- Dynamic IBClient reference based on configuration -->
-  <ItemGroup Condition="Exists('IBClientConfig.json')">
-    <Compile Include="$(IBClientPath)\*.cs" />
-    <Compile Remove="$(IBClientPath)\obj\**\*.cs" />
-    <Compile Remove="$(IBClientPath)\bin\**\*.cs" />
-  </ItemGroup>
 
   <!-- Exclude removed directories from compilation -->
   <ItemGroup>
