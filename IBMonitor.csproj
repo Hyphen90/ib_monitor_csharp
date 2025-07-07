@@ -17,12 +17,52 @@
     <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
   </ItemGroup>
 
-  <!-- Exclude IBSampleApp directory from compilation -->
+  <!-- IBClient Setup and Configuration -->
+  <Target Name="CheckIBClientSetup" BeforeTargets="BeforeBuild">
+    <Message Text="Checking IBClient configuration..." Importance="normal" />
+    
+    <!-- Check if IBClientConfig.json exists -->
+    <Error Condition="!Exists('IBClientConfig.json')" 
+           Text="IBClient not configured! Please run the setup script:&#xA;Windows: powershell -ExecutionPolicy Bypass -File Setup-IBClient.ps1&#xA;Linux/WSL: ./setup-ibclient.sh&#xA;&#xA;Or manually create IBClientConfig.json with your IBClient path.&#xA;Download IB API v10.30 from: https://interactivebrokers.github.io/" />
+    
+    <!-- Read IBClient configuration -->
+    <ReadLinesFromFile File="IBClientConfig.json" Condition="Exists('IBClientConfig.json')">
+      <Output TaskParameter="Lines" ItemName="ConfigLines" />
+    </ReadLinesFromFile>
+    
+    <!-- Extract IBClient path from JSON (simple regex approach) -->
+    <PropertyGroup Condition="Exists('IBClientConfig.json')">
+      <IBClientConfigContent>@(ConfigLines, '')</IBClientConfigContent>
+      <IBClientPath>$([System.Text.RegularExpressions.Regex]::Match($(IBClientConfigContent), '"IBClientPath"\s*:\s*"([^"]*)"').Groups[1].Value)</IBClientPath>
+    </PropertyGroup>
+    
+    <!-- Validate IBClient path -->
+    <Error Condition="'$(IBClientPath)' == ''" 
+           Text="IBClient path not found in configuration. Please run setup again." />
+    <Error Condition="!Exists('$(IBClientPath)')" 
+           Text="IBClient path does not exist: $(IBClientPath)&#xA;Please run setup again or update IBClientConfig.json" />
+    
+    <Message Text="Using IBClient from: $(IBClientPath)" Importance="normal" />
+  </Target>
+
+  <!-- Dynamic IBClient reference based on configuration -->
+  <ItemGroup Condition="Exists('IBClientConfig.json')">
+    <Compile Include="$(IBClientPath)\*.cs" />
+    <Compile Remove="$(IBClientPath)\obj\**\*.cs" />
+    <Compile Remove="$(IBClientPath)\bin\**\*.cs" />
+  </ItemGroup>
+
+  <!-- Exclude removed directories from compilation -->
   <ItemGroup>
+    <Compile Remove="IBClient\**" />
+    <Content Remove="IBClient\**" />
+    <EmbeddedResource Remove="IBClient\**" />
+    <None Remove="IBClient\**" />
+    
     <Compile Remove="IBSampleApp\**" />
     <Content Remove="IBSampleApp\**" />
     <EmbeddedResource Remove="IBSampleApp\**" />
     <None Remove="IBSampleApp\**" />
   </ItemGroup>
 
-</Project> 
+</Project>
