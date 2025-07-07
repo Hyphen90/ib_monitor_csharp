@@ -127,16 +127,69 @@ A fully reactive C# program for automatic monitoring of trading positions via th
 ## Requirements
 
 - .NET 8.0 or higher
+- Interactive Brokers API v10.30 (see setup below)
 - Interactive Brokers TWS or IB Gateway
 - Active IB API connection (typically port 7497 for TWS Paper Trading)
+
+## Prerequisites
+
+### Interactive Brokers API v10.30
+
+Before building this project, you need to download and set up the Interactive Brokers API:
+
+1. **Download IB API v10.30** from: https://interactivebrokers.github.io/
+2. **Extract/Install** the API to your preferred location
+3. **Note the path** to the `CSharpClient\client` directory
+
+### First Build Setup
+
+On your first build, the system will check for IBClient configuration. If not found, you'll need to run the setup:
+
+**Windows (PowerShell):**
+```powershell
+powershell -ExecutionPolicy Bypass -File Setup-IBClient.ps1
+```
+
+**Linux/WSL:**
+```bash
+./setup-ibclient.sh
+```
+
+**Manual Configuration:**
+You can also manually create `IBClientConfig.json`:
+```json
+{
+  "IBClientPath": "/path/to/your/CSharpClient/client",
+  "SetupCompleted": true,
+  "RequiredVersion": "10.30",
+  "LastUpdated": "2024-01-01 12:00:00"
+}
+```
+
+**Example paths:**
+- Windows: `C:\TWS API\source\CSharpClient\client`
+- WSL: `/mnt/c/TWS API/source/CSharpClient/client`
+- Linux: `/home/user/IBAPI/source/CSharpClient/client`
 
 ## Installation
 
 1. Clone repository or download source code
-2. Compile project:
+2. Run IBClient setup (first time only):
+   ```bash
+   # Windows
+   powershell -ExecutionPolicy Bypass -File Setup-IBClient.ps1
+   
+   # Linux/WSL  
+   ./setup-ibclient.sh
+   ```
+3. Compile project:
    ```bash
    dotnet build
    ```
+
+**Note:** The `IBClientConfig.json` file is git-ignored and contains your local IBClient path. Each developer needs to run the setup once.
+
+📖 **For detailed setup instructions, see [SETUP.md](SETUP.md)**
 
 ## Configuration
 
