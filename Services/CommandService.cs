@@ -13,15 +13,17 @@ namespace IBMonitor.Services
         private readonly PositionMonitorService _positionService;
         private readonly IBConnectionService _ibService;
         private readonly ConfigService _configService;
+        private readonly BarTrailingStopManager _barTrailingManager;
 
         public CommandService(ILogger logger, MonitorConfig config, PositionMonitorService positionService, 
-            IBConnectionService ibService, ConfigService configService)
+            IBConnectionService ibService, ConfigService configService, BarTrailingStopManager barTrailingManager)
         {
             _logger = logger;
             _config = config;
             _positionService = positionService;
             _ibService = ibService;
             _configService = configService;
+            _barTrailingManager = barTrailingManager;
         }
 
         public async Task<string> ProcessCommandAsync(string input)
@@ -107,6 +109,7 @@ namespace IBMonitor.Services
                 "maxshares" => SetMaxShares(value),
                 "symbol" => SetSymbol(value),
                 "breakeven" => HandleBreakEvenCommand(parts),
+                "trailing" => HandleTrailingCommand(parts),
                 _ => $"Unknown 'set' command: {subCommand}"
             };
         }
@@ -286,6 +289,34 @@ namespace IBMonitor.Services
 
             _positionService.ForceBreakEven(_config.Symbol);
             return $"Break-Even manually triggered for {_config.Symbol}. Market: {position.MarketPrice:F2}, Trigger: {triggerPrice:F2}";
+        }
+
+        private string HandleTrailingCommand(string[] parts)
+        {
+            if (parts.Length < 3)
+                return "Invalid 'set trailing' syntax. Use: 'set trailing pauseresume'";
+
+            var subCommand = parts[2].ToLowerInvariant();
+            
+            return subCommand switch
+            {
+                "pauseresume" => ToggleTrailingPause(),
+                _ => $"Unknown 'trailing' command: {subCommand}. Use: pauseresume"
+            };
+        }
+
+        private string ToggleTrailingPause()
+        {
+            var isPaused = _barTrailingManager.ToggleTrailingPause();
+            
+            if (isPaused)
+            {
+                return "Trailing functionality paused";
+            }
+            else
+            {
+                return "Trailing functionality resumed";
+            }
         }
 
         private async Task<string> HandleCloseCommand()
@@ -514,6 +545,7 @@ namespace IBMonitor.Services
             {
                 "config" => ShowConfig(),
                 "takeprofit" => ShowTakeProfitStatus(),
+                "trailing" => ShowTrailingStatus(),
                 _ => $"Unknown 'show' command: {subCommand}"
             };
         }
@@ -535,6 +567,17 @@ namespace IBMonitor.Services
             {
                 return $"No take-profit trigger set for {_config.Symbol} (Current: ${position.MarketPrice:F2})";
             }
+        }
+
+        private string ShowTrailingStatus()
+        {
+            var status = _barTrailingManager.IsPaused ? "PAUSED" : "ACTIVE";
+            var barTrailingStatus = _config.UseBarBasedTrailing ? "enabled" : "disabled";
+            
+            return $"Trailing Status: {status}\n" +
+                   $"Bar-based trailing: {barTrailingStatus}\n" +
+                   $"Bar trailing offset: {_config.BarTrailingOffset:F2}\n" +
+                   $"Bar trailing lookback: {_config.BarTrailingLookback}";
         }
 
 
@@ -573,10 +616,12 @@ SET Commands:
   set breakeven offset <value>           - Set break-even offset in USD
   set breakeven force                    - Manually trigger break-even
   set symbol <SYMBOL>                    - Set symbol to monitor
+  set trailing pauseresume               - Toggle trailing pause/resume (affects all trailing types)
 
 SHOW Commands:
   show config                            - Display current configuration
   show takeprofit                        - Display take-profit trigger status
+  show trailing                          - Display trailing functionality status
 
 GENERAL:
   help                                   - Show this help

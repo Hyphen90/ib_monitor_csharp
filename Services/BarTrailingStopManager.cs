@@ -13,6 +13,9 @@ namespace IBMonitor.Services
         private readonly ConcurrentDictionary<string, Queue<Bar>> _barHistory = new();
         private readonly ConcurrentDictionary<string, Bar> _lastReceivedBar = new();
         private readonly object _lockObject = new object();
+        private bool _isPaused = false;
+
+        public bool IsPaused => _isPaused;
 
         public BarTrailingStopManager(ILogger logger, MonitorConfig config)
         {
@@ -20,9 +23,35 @@ namespace IBMonitor.Services
             _config = config;
         }
 
+        public void PauseTrailing()
+        {
+            _isPaused = true;
+            _logger.Information("Trailing functionality paused");
+        }
+
+        public void ResumeTrailing()
+        {
+            _isPaused = false;
+            _logger.Information("Trailing functionality resumed");
+        }
+
+        public bool ToggleTrailingPause()
+        {
+            if (_isPaused)
+            {
+                ResumeTrailing();
+                return false; // now active
+            }
+            else
+            {
+                PauseTrailing();
+                return true; // now paused
+            }
+        }
+
         public double? ProcessNewBar(Bar bar, PositionInfo position)
         {
-            if (!_config.UseBarBasedTrailing || position.Quantity <= 0)
+            if (!_config.UseBarBasedTrailing || position.Quantity <= 0 || _isPaused)
                 return null;
 
             lock (_lockObject)

@@ -50,8 +50,9 @@ namespace IBMonitor
                 // Initialize services
                 _ibService = new IBConnectionService(_logger, config);
                 _positionService = new PositionMonitorService(_logger, config, _ibService);
+                var barTrailingManager = new BarTrailingStopManager(_logger, config);
 
-                var commandService = new CommandService(_logger, config, _positionService, _ibService, configService);
+                var commandService = new CommandService(_logger, config, _positionService, _ibService, configService, barTrailingManager);
                 
                 // Setup console and pipe services
                 _consoleService = new ConsoleService(_logger, commandService);
