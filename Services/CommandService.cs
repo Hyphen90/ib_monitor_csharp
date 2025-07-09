@@ -78,6 +78,7 @@ namespace IBMonitor.Services
                 return command switch
                 {
                     "c" => await HandleCloseCommand(),
+                    "c0" => HandleImmediateTargetReset(),
                     "set" => HandleSetCommand(parts),
                     "show" => HandleShowCommand(parts),
                     "help" => ShowHelp(),
@@ -334,6 +335,21 @@ namespace IBMonitor.Services
             }
         }
 
+        private string HandleImmediateTargetReset()
+        {
+            try
+            {
+                _positionService.ResetTakeProfitTrigger();
+                _logger.Information("C0 command executed - take-profit target reset");
+                return "Take-profit target immediately reset.";
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error executing C0 command");
+                return $"Error executing C0 command: {ex.Message}";
+            }
+        }
+
         private async Task<string> HandleConditionalCloseCommand(string input)
         {
             if (string.IsNullOrEmpty(_config.Symbol))
@@ -353,16 +369,17 @@ namespace IBMonitor.Services
                 if (!double.TryParse(priceStr, out var targetPrice) || targetPrice <= 0)
                     return "Invalid target price. Must be a positive number.";
 
-                // Check if we have an open position
+                // Get position info (can be null or flat - we allow setting targets in flat state now)
                 var position = _positionService.GetPosition(_config.Symbol);
-                if (position == null || position.IsFlat)
-                    return $"No open position found for {_config.Symbol}. Take-profit can only be set with an active position.";
 
-                // Check if target price is higher than current market price (take-profit logic)
-                var currentPrice = position.MarketPrice;
-                if (currentPrice > 0 && targetPrice <= currentPrice)
+                // Check if target price is higher than current market price (only for active positions)
+                if (position != null && !position.IsFlat)
                 {
-                    return $"Take-profit price {targetPrice:F2} must be higher than current market price {currentPrice:F2}. Use regular 'C' command for immediate close.";
+                    var currentPrice = position.MarketPrice;
+                    if (currentPrice > 0 && targetPrice <= currentPrice)
+                    {
+                        return $"Take-profit price {targetPrice:F2} must be higher than current market price {currentPrice:F2}. Use regular 'C' command for immediate close.";
+                    }
                 }
 
                 // Set take-profit trigger
@@ -553,8 +570,20 @@ namespace IBMonitor.Services
                 return "No symbol configured.";
 
             var position = _positionService.GetPosition(_config.Symbol);
+            
             if (position == null || position.IsFlat)
-                return $"No open position found for {_config.Symbol}.";
+            {
+                // Check for flat state target
+                var flatStateStatus = _positionService.GetFlatStateTakeProfitStatus();
+                if (!string.IsNullOrEmpty(flatStateStatus))
+                {
+                    return $"No open position for {_config.Symbol}. {flatStateStatus}";
+                }
+                else
+                {
+                    return $"No open position found for {_config.Symbol}. No take-profit target set.";
+                }
+            }
 
             if (position.TakeProfitActive && position.TakeProfitPrice.HasValue)
             {
@@ -601,6 +630,8 @@ BUY Commands:
 CLOSE Commands:
   C                                      - Cancel all orders and place sell limit at Bid - SellOffset
   C<price>                               - Set take-profit trigger at target price (e.g. C5.43)
+                                           Can be set in flat state (before position is active)
+  C0                                     - Immediately reset/clear take-profit target
 
 SET Commands:
   set stoploss <value>                   - Set stop-loss distance in USD

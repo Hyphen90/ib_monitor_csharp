@@ -20,6 +20,10 @@ namespace IBMonitor.Services
         private const int MARKET_DATA_TICKER_ID = 1000; // Fixed ticker ID for symbol market data
         private double _currentAskPrice = 0.0;
         private bool _isClosing = false;
+        
+        // Take-Profit for flat state (target can be set before position is active)
+        private double? _flatStateTakeProfitPrice = null;
+        private bool _flatStateTakeProfitActive = false;
 
         public event Action<PositionInfo>? PositionOpened;
         public event Action<PositionInfo>? PositionClosed;
@@ -79,6 +83,19 @@ namespace IBMonitor.Services
                     _logger.Information("New position detected: {Symbol} - Qty: {Quantity}, AvgPrice: {AvgPrice:F2}", 
                         contract.Symbol, position, avgCost);
                     
+                    // Check if there's a flat state take-profit target to activate
+                    if (_flatStateTakeProfitActive && _flatStateTakeProfitPrice.HasValue)
+                    {
+                        positionInfo.TakeProfitPrice = _flatStateTakeProfitPrice.Value;
+                        positionInfo.TakeProfitActive = true;
+                        _logger.Information("Flat state take-profit target activated for new position {Symbol}: Target price {TargetPrice:F2}", 
+                            contract.Symbol, _flatStateTakeProfitPrice.Value);
+                        
+                        // Clear flat state target after activation
+                        _flatStateTakeProfitPrice = null;
+                        _flatStateTakeProfitActive = false;
+                    }
+                    
                     // Execute position open script if configured
                     ExecutePositionOpenScript(positionInfo);
                     
@@ -123,6 +140,12 @@ namespace IBMonitor.Services
                         // Position closed - reset break-even trigger for future positions
                         existingPosition.BreakEvenTriggered = false;
                         CancelExistingOrders(existingPosition);
+                        
+                        // Reset take-profit trigger when position goes flat
+                        existingPosition.TakeProfitPrice = null;
+                        existingPosition.TakeProfitActive = false;
+                        _logger.Information("Take-profit trigger reset for {Symbol} - position went flat", contract.Symbol);
+                        
                         PositionClosed?.Invoke(existingPosition);
                         
                         // Remove position from dictionary when flat
@@ -968,18 +991,33 @@ namespace IBMonitor.Services
             lock (_lockObject)
             {
                 var position = GetPosition(symbol);
+                
                 if (position == null || position.IsFlat)
-                    return $"No open position found for {symbol}. Take-profit can only be set with an active position.";
+                {
+                    // No active position - set flat state take-profit target
+                    // Reset any existing take-profit trigger first
+                    ResetTakeProfitTrigger();
+                    
+                    // Set flat state target
+                    _flatStateTakeProfitPrice = targetPrice;
+                    _flatStateTakeProfitActive = true;
+                    
+                    _logger.Information("Take-profit trigger set for flat state {Symbol}: Target price {TargetPrice:F2}", symbol, targetPrice);
+                    return $"Take-profit trigger set for {symbol} at ${targetPrice:F2}. Target will be activated when a new position is opened.";
+                }
+                else
+                {
+                    // Active position - set take-profit trigger immediately
+                    // Reset any existing take-profit trigger first
+                    ResetTakeProfitTrigger();
 
-                // Reset any existing take-profit trigger first
-                ResetTakeProfitTrigger();
+                    // Set new take-profit trigger
+                    position.TakeProfitPrice = targetPrice;
+                    position.TakeProfitActive = true;
 
-                // Set new take-profit trigger
-                position.TakeProfitPrice = targetPrice;
-                position.TakeProfitActive = true;
-
-                _logger.Information("Take-profit trigger set for {Symbol}: Target price {TargetPrice:F2}", symbol, targetPrice);
-                return $"Take-profit trigger set for {symbol} at ${targetPrice:F2}. Position will be closed when market price reaches this level.";
+                    _logger.Information("Take-profit trigger set for {Symbol}: Target price {TargetPrice:F2}", symbol, targetPrice);
+                    return $"Take-profit trigger set for {symbol} at ${targetPrice:F2}. Position will be closed when market price reaches this level.";
+                }
             }
         }
 
@@ -988,6 +1026,9 @@ namespace IBMonitor.Services
             lock (_lockObject)
             {
                 var hadActiveTrigger = false;
+                var hadFlatStateTrigger = false;
+                
+                // Reset position-based triggers
                 foreach (var position in _positions.Values)
                 {
                     if (position.TakeProfitActive)
@@ -1000,10 +1041,32 @@ namespace IBMonitor.Services
                     position.TakeProfitActive = false;
                 }
                 
-                if (hadActiveTrigger)
+                // Reset flat state triggers
+                if (_flatStateTakeProfitActive)
+                {
+                    hadFlatStateTrigger = true;
+                    _logger.Information("Take-profit flat state trigger reset (was: {TargetPrice:F2})", 
+                        _flatStateTakeProfitPrice ?? 0);
+                }
+                _flatStateTakeProfitPrice = null;
+                _flatStateTakeProfitActive = false;
+                
+                if (hadActiveTrigger || hadFlatStateTrigger)
                 {
                     _logger.Information("Take-profit trigger reset to default state");
                 }
+            }
+        }
+
+        public string GetFlatStateTakeProfitStatus()
+        {
+            lock (_lockObject)
+            {
+                if (_flatStateTakeProfitActive && _flatStateTakeProfitPrice.HasValue)
+                {
+                    return $"Flat state take-profit target: ${_flatStateTakeProfitPrice.Value:F2} (will activate when new position opens)";
+                }
+                return string.Empty;
             }
         }
 
