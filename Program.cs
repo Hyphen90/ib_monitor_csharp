@@ -1,6 +1,9 @@
 using IBMonitor.Config;
 using IBMonitor.Services;
 using Serilog;
+using System;
+using System.IO;
+using System.Reflection;
 
 namespace IBMonitor
 {
@@ -18,7 +21,30 @@ namespace IBMonitor
         {
             try
             {
-                Console.WriteLine("=== IB Position Monitor ===");
+                // Get build time from assembly
+                var assembly = Assembly.GetExecutingAssembly();
+                DateTime buildTime;
+                
+                try
+                {
+                    var location = assembly.Location;
+                    if (string.IsNullOrEmpty(location))
+                    {
+                        // Fallback for single-file deployments or when Location is empty
+                        buildTime = File.GetLastWriteTime(Environment.ProcessPath ?? Assembly.GetExecutingAssembly().CodeBase?.Replace("file:///", ""));
+                    }
+                    else
+                    {
+                        buildTime = File.GetLastWriteTime(location);
+                    }
+                }
+                catch
+                {
+                    // Ultimate fallback - use current time
+                    buildTime = DateTime.Now;
+                }
+                
+                Console.WriteLine($"=== IB Position Monitor === (Built: {buildTime:yyyy-MM-dd HH:mm:ss})");
                 Console.WriteLine("Loading configuration...");
 
                 // Load configuration
