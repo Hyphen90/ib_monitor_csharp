@@ -623,12 +623,6 @@ namespace IBMonitor.Services
         {
             lock (_lockObject)
             {
-                if (!_config.UseBreakEven)
-                {
-                    _logger.Warning("Break-Even manually triggered for {Symbol} but UseBreakEven is disabled in config", symbol);
-                    return;
-                }
-
                 var position = GetPosition(symbol);
                 if (position != null && position.IsLongPosition && !position.BreakEvenTriggered)
                 {

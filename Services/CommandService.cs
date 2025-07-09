@@ -266,9 +266,6 @@ namespace IBMonitor.Services
             if (string.IsNullOrEmpty(_config.Symbol))
                 return "No symbol configured. Use 'set symbol <SYMBOL>' first.";
 
-            if (!_config.UseBreakEven)
-                return "Break-Even functionality is disabled. Use 'set breakeven enable' first.";
-
             if (!_config.BreakEven.HasValue)
                 return "Break-Even trigger value is not configured. Use 'set breakeven trigger <value>' first.";
 
