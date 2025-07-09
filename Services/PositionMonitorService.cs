@@ -86,14 +86,34 @@ namespace IBMonitor.Services
                     // Check if there's a flat state take-profit target to activate
                     if (_flatStateTakeProfitActive && _flatStateTakeProfitPrice.HasValue)
                     {
-                        positionInfo.TakeProfitPrice = _flatStateTakeProfitPrice.Value;
-                        positionInfo.TakeProfitActive = true;
-                        _logger.Information("Flat state take-profit target activated for new position {Symbol}: Target price {TargetPrice:F2}", 
-                            contract.Symbol, _flatStateTakeProfitPrice.Value);
+                        // Safety check: Only activate target if entry price allows profitable exit
+                        // For long positions: entry price must be below target
+                        // For short positions: entry price must be above target
+                        bool unsafeTarget = (position > 0 && avgCost >= _flatStateTakeProfitPrice.Value) ||
+                                           (position < 0 && avgCost <= _flatStateTakeProfitPrice.Value);
                         
-                        // Clear flat state target after activation
-                        _flatStateTakeProfitPrice = null;
-                        _flatStateTakeProfitActive = false;
+                        if (unsafeTarget)
+                        {
+                            // Entry price is at or above target - delete target for safety
+                            _logger.Warning("Flat state take-profit target deleted for safety: Entry price {EntryPrice:F2} makes target {TargetPrice:F2} unprofitable for {Symbol} ({PositionType})", 
+                                avgCost, _flatStateTakeProfitPrice.Value, contract.Symbol, position > 0 ? "LONG" : "SHORT");
+                            
+                            // Clear flat state target without activation
+                            _flatStateTakeProfitPrice = null;
+                            _flatStateTakeProfitActive = false;
+                        }
+                        else
+                        {
+                            // Safe to activate target
+                            positionInfo.TakeProfitPrice = _flatStateTakeProfitPrice.Value;
+                            positionInfo.TakeProfitActive = true;
+                            _logger.Information("Flat state take-profit target activated for new position {Symbol}: Target price {TargetPrice:F2} (Entry: {EntryPrice:F2})", 
+                                contract.Symbol, _flatStateTakeProfitPrice.Value, avgCost);
+                            
+                            // Clear flat state target after activation
+                            _flatStateTakeProfitPrice = null;
+                            _flatStateTakeProfitActive = false;
+                        }
                     }
                     
                     // Execute position open script if configured
