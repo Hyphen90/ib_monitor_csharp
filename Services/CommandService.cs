@@ -267,9 +267,6 @@ namespace IBMonitor.Services
             if (string.IsNullOrEmpty(_config.Symbol))
                 return "No symbol configured. Use 'set symbol <SYMBOL>' first.";
 
-            if (!_config.BreakEven.HasValue)
-                return "Break-Even trigger value is not configured. Use 'set breakeven trigger <value>' first.";
-
             var position = _positionService.GetPosition(_config.Symbol);
             if (position == null || position.IsFlat)
                 return $"No open position found for {_config.Symbol}.";
@@ -277,16 +274,14 @@ namespace IBMonitor.Services
             if (position.BreakEvenTriggered)
                 return $"Break-Even already triggered for {_config.Symbol}.";
 
-            // Check if break-even condition is met before forcing
-            var triggerPrice = position.AveragePrice + _config.BreakEven.Value;
-            
-            if (position.MarketPrice < triggerPrice)
+            // For force command, only require market price to be above average price
+            if (position.MarketPrice <= position.AveragePrice)
             {
-                return $"Break-Even force rejected for {_config.Symbol}. Market price {position.MarketPrice:F2} is below trigger price {triggerPrice:F2} (AvgPrice {position.AveragePrice:F2} + BreakEven {_config.BreakEven.Value:F2}). Break-Even can only be forced when market price >= trigger price.";
+                return $"Break-Even force rejected for {_config.Symbol}. Market price {position.MarketPrice:F2} must be above average price {position.AveragePrice:F2}. Current difference: {(position.MarketPrice - position.AveragePrice):F2}";
             }
 
             _positionService.ForceBreakEven(_config.Symbol);
-            return $"Break-Even manually triggered for {_config.Symbol}. Market: {position.MarketPrice:F2}, Trigger: {triggerPrice:F2}";
+            return $"Break-Even manually triggered for {_config.Symbol}. Market: {position.MarketPrice:F2}, Average: {position.AveragePrice:F2}";
         }
 
         private string HandleTrailingCommand(string[] parts)
