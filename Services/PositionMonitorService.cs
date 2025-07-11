@@ -360,7 +360,8 @@ namespace IBMonitor.Services
                 LmtPrice = limitPrice,
                 Tif = "GTC",
                 Transmit = true,
-                OutsideRth = true  // Allow execution outside regular trading hours
+                OutsideRth = true,  // Allow execution outside regular trading hours
+                UsePriceMgmtAlgo = true  // Enable IB's price management algorithm
             };
         }
 
