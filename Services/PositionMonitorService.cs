@@ -669,26 +669,18 @@ namespace IBMonitor.Services
                 var position = GetPosition(symbol);
                 if (position != null && position.IsLongPosition && !position.BreakEvenTriggered)
                 {
-                    // Check if break-even condition is met (same logic as CheckBreakEvenTrigger)
-                    if (!_config.BreakEven.HasValue)
+                    // For force command, only require market price to be above average price
+                    if (position.MarketPrice > position.AveragePrice)
                     {
-                        _logger.Warning("Break-Even manually triggered for {Symbol} but BreakEven trigger value is not configured", symbol);
-                        return;
-                    }
-
-                    var triggerPrice = position.AveragePrice + _config.BreakEven.Value;
-                    
-                    if (position.MarketPrice >= triggerPrice)
-                    {
-                        _logger.Information("Break-Even manually triggered for {Symbol}. Market: {MarketPrice:F2}, Trigger: {TriggerPrice:F2} (AvgPrice + {BreakEven:F2})", 
-                            symbol, position.MarketPrice, triggerPrice, _config.BreakEven.Value);
+                        _logger.Information("Break-Even manually triggered for {Symbol}. Market: {MarketPrice:F2}, Average: {AveragePrice:F2}", 
+                            symbol, position.MarketPrice, position.AveragePrice);
                         CreateBreakEvenOrder(position);
                         position.BreakEvenTriggered = true;
                     }
                     else
                     {
-                        _logger.Warning("Break-Even force rejected for {Symbol}. Market price {MarketPrice:F2} is below trigger price {TriggerPrice:F2} (AvgPrice {AvgPrice:F2} + BreakEven {BreakEven:F2})", 
-                            symbol, position.MarketPrice, triggerPrice, position.AveragePrice, _config.BreakEven.Value);
+                        _logger.Warning("Break-Even force rejected for {Symbol}. Market price {MarketPrice:F2} must be above average price {AveragePrice:F2}. Current difference: {Difference:F2}", 
+                            symbol, position.MarketPrice, position.AveragePrice, position.MarketPrice - position.AveragePrice);
                     }
                 }
             }
