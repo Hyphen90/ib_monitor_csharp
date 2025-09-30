@@ -13,6 +13,7 @@ namespace IBMonitor.Services
         private readonly IBConnectionService _ibService;
         private readonly RealTimeBarService _realTimeBarService;
         private readonly BarTrailingStopManager _barTrailingStopManager;
+        private readonly TradeLoggingService _tradeLoggingService;
         private readonly Dictionary<string, PositionInfo> _positions = new();
         private readonly Dictionary<int, int> _orderToPositionMap = new(); // OrderId -> Position tracking
         private readonly object _lockObject = new object();
@@ -35,14 +36,16 @@ namespace IBMonitor.Services
             _config = config;
             _ibService = ibService;
 
-            // Initialize bar-based trailing services
+            // Initialize services
             _realTimeBarService = new RealTimeBarService(_logger, _config, _ibService);
             _barTrailingStopManager = new BarTrailingStopManager(_logger, _config);
+            _tradeLoggingService = new TradeLoggingService(_logger);
 
             // Subscribe to IB events
             _ibService.PositionUpdate += OnPositionUpdate;
             _ibService.OrderStatusUpdate += OnOrderStatusUpdate;
             _ibService.OpenOrderReceived += OnOpenOrderReceived;
+            _ibService.ExecutionReceived += OnExecutionReceived;
             _ibService.TickPriceReceived += OnTickPriceReceived;
             _ibService.Connected += OnIBConnected;
             _ibService.RealTimeBarReceived += OnRealTimeBarReceived;
@@ -82,6 +85,10 @@ namespace IBMonitor.Services
                     _positions[key] = positionInfo;
                     _logger.Information("New position detected: {Symbol} - Qty: {Quantity}, AvgPrice: {AvgPrice:F2}", 
                         contract.Symbol, position, avgCost);
+                    
+                    // Record trade opening for logging (flat -> long position)
+                    _tradeLoggingService.RecordPositionOpened(contract.Symbol, position, avgCost, 
+                        _currentBidPrice, _currentAskPrice, DateTime.Now);
                     
                     // Check if there's a flat state take-profit target to activate
                     if (_flatStateTakeProfitActive && _flatStateTakeProfitPrice.HasValue)
@@ -157,7 +164,10 @@ namespace IBMonitor.Services
 
                     if (isNowFlat && !wasFlat)
                     {
-                        // Position closed - reset break-even trigger for future positions
+                        // Position closed - record trade closure for logging (long -> flat position)
+                        _tradeLoggingService.RecordPositionClosed(contract.Symbol, avgCost, DateTime.Now);
+                        
+                        // Reset break-even trigger for future positions
                         existingPosition.BreakEvenTriggered = false;
                         CancelExistingOrders(existingPosition);
                         
@@ -389,6 +399,7 @@ namespace IBMonitor.Services
         private void OnOrderStatusUpdate(int orderId, string status, decimal filled, decimal remaining, 
             double avgFillPrice, int permId, int parentId, double lastFillPrice, int clientId, string whyHeld, double mktCapPrice)
         {
+            // Only handle stop-loss order tracking - execDetails handles trade logging
             if (_orderToPositionMap.ContainsKey(orderId))
             {
                 _logger.Debug("Stop-Loss order update: {OrderId} Status:{Status} Filled:{Filled}", 
@@ -421,6 +432,52 @@ namespace IBMonitor.Services
                         }
                     }
                 }
+            }
+        }
+
+        private void OnExecutionReceived(int reqId, Contract contract, Execution execution)
+        {
+            // Only process executions for our monitored symbol
+            if (string.IsNullOrEmpty(_config.Symbol) || 
+                !contract.Symbol.Equals(_config.Symbol, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _logger.Information("Processing execution for trade logging: {Symbol} OrderId:{OrderId} Side:{Side} Shares:{Shares} Price:{Price:F4} Time:{Time}", 
+                contract.Symbol, execution.OrderId, execution.Side, execution.Shares, execution.Price, execution.Time);
+
+            // Parse execution time from IB format (YYYYMMDD HH:MM:SS)
+            DateTime executionTime = DateTime.Now;
+            if (!string.IsNullOrEmpty(execution.Time))
+            {
+                if (DateTime.TryParseExact(execution.Time, "yyyyMMdd  HH:mm:ss", null, 
+                    System.Globalization.DateTimeStyles.None, out var parsedTime))
+                {
+                    executionTime = parsedTime;
+                }
+                else if (DateTime.TryParseExact(execution.Time, "yyyyMMdd HH:mm:ss", null, 
+                    System.Globalization.DateTimeStyles.None, out var parsedTime2))
+                {
+                    executionTime = parsedTime2;
+                }
+            }
+
+            // Determine if this is a BUY or SELL execution
+            if (execution.Side.Equals("BOT", StringComparison.OrdinalIgnoreCase))
+            {
+                // BUY execution (BOT = Bought)
+                _tradeLoggingService.RecordBuyOrderExecution(execution.OrderId, contract.Symbol, execution.Price, executionTime);
+            }
+            else if (execution.Side.Equals("SLD", StringComparison.OrdinalIgnoreCase))
+            {
+                // SELL execution (SLD = Sold)
+                _tradeLoggingService.RecordSellOrderExecution(execution.OrderId, contract.Symbol, execution.Price, executionTime);
+            }
+            else
+            {
+                _logger.Warning("Unknown execution side: {Side} for OrderId:{OrderId} {Symbol}", 
+                    execution.Side, execution.OrderId, contract.Symbol);
             }
         }
 

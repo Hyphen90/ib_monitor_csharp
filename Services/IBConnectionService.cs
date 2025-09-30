@@ -27,6 +27,7 @@ namespace IBMonitor.Services
         public event Action<string, Contract, decimal, double>? PositionUpdate;
         public event Action<int, string, decimal, decimal, double, int, int, double, int, string, double>? OrderStatusUpdate;
         public event Action<int, Contract, Order, OrderState>? OpenOrderReceived;
+        public event Action<int, Contract, Execution>? ExecutionReceived;
         public event Action<int, int, string, string>? ErrorReceived;
         public event Action<int, int, double, TickAttrib>? TickPriceReceived;
         public event Action<int, long, double, double, double, double, decimal, decimal, int>? RealTimeBarReceived;
@@ -349,6 +350,13 @@ namespace IBMonitor.Services
             _logger.Debug("Open Order: {OrderId} {Symbol} {OrderType} {TotalQuantity}", 
                 orderId, contract.Symbol, order.OrderType, order.TotalQuantity);
             OpenOrderReceived?.Invoke(orderId, contract, order, orderState);
+        }
+
+        public override void execDetails(int reqId, Contract contract, Execution execution)
+        {
+            _logger.Information("Execution Details: ReqId:{ReqId} OrderId:{OrderId} {Symbol} Side:{Side} Shares:{Shares} Price:{Price:F4} Time:{Time}", 
+                reqId, execution.OrderId, contract.Symbol, execution.Side, execution.Shares, execution.Price, execution.Time);
+            ExecutionReceived?.Invoke(reqId, contract, execution);
         }
 
         public override void tickPrice(int tickerId, int field, double price, TickAttrib attribs)

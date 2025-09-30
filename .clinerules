@@ -1,1 +1,2 @@
 - Never run git commands automatically; only if user explicitly forced you to.
+- Never push changes to the remote repository; only if the user explicitly forced you to.
