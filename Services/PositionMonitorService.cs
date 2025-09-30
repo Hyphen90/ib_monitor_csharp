@@ -16,6 +16,7 @@ namespace IBMonitor.Services
         private readonly TradeLoggingService _tradeLoggingService;
         private readonly Dictionary<string, PositionInfo> _positions = new();
         private readonly Dictionary<int, int> _orderToPositionMap = new(); // OrderId -> Position tracking
+        private readonly HashSet<int> _activeSellOrderIds = new(); // Track active sell orders to prevent stop-loss interference
         private readonly object _lockObject = new object();
         private int _marketDataTickerId = -1;
         private const int MARKET_DATA_TICKER_ID = 1000; // Fixed ticker ID for symbol market data
@@ -190,19 +191,28 @@ namespace IBMonitor.Services
                         
                         if (position > 0) // Only for long positions
                         {
-                            // Only modify quantity if we have an existing stop-loss order
-                            if (existingPosition.StopLossOrderId.HasValue)
+                            // Check if there are active sell orders that could interfere with stop-loss adjustments
+                            if (_activeSellOrderIds.Any())
                             {
-                                ModifyStopLossOrderQuantity(existingPosition);
-                            }
-                            else if (!_isClosing)
-                            {
-                                // No existing stop-loss, create a new one (but not during close mode)
-                                CreateStopLossOrder(existingPosition);
+                                _logger.Debug("Skipping stop-loss adjustment for {Symbol} - active sell orders detected: {ActiveOrders}", 
+                                    contract.Symbol, string.Join(", ", _activeSellOrderIds));
                             }
                             else
                             {
-                                _logger.Debug("Skipping stop-loss creation for {Symbol} - close mode is active", contract.Symbol);
+                                // Only modify quantity if we have an existing stop-loss order
+                                if (existingPosition.StopLossOrderId.HasValue)
+                                {
+                                    ModifyStopLossOrderQuantity(existingPosition);
+                                }
+                                else if (!_isClosing)
+                                {
+                                    // No existing stop-loss, create a new one (but not during close mode)
+                                    CreateStopLossOrder(existingPosition);
+                                }
+                                else
+                                {
+                                    _logger.Debug("Skipping stop-loss creation for {Symbol} - close mode is active", contract.Symbol);
+                                }
                             }
                             CheckBreakEvenTrigger(existingPosition);
                         }
@@ -399,19 +409,33 @@ namespace IBMonitor.Services
         private void OnOrderStatusUpdate(int orderId, string status, decimal filled, decimal remaining, 
             double avgFillPrice, int permId, int parentId, double lastFillPrice, int clientId, string whyHeld, double mktCapPrice)
         {
-            // Only handle stop-loss order tracking - execDetails handles trade logging
-            if (_orderToPositionMap.ContainsKey(orderId))
+            lock (_lockObject)
             {
-                _logger.Debug("Stop-Loss order update: {OrderId} Status:{Status} Filled:{Filled}", 
-                    orderId, status, filled);
-
-                if (status == "Filled" || status == "Cancelled")
+                // Handle active sell order tracking cleanup
+                if (_activeSellOrderIds.Contains(orderId))
                 {
-                    _orderToPositionMap.Remove(orderId);
-                    
-                    // Clear order references from positions when order is filled/cancelled
-                    lock (_lockObject)
+                    _logger.Debug("Sell order update: {OrderId} Status:{Status} Filled:{Filled} Remaining:{Remaining}", 
+                        orderId, status, filled, remaining);
+
+                    if (status == "Filled" || status == "Cancelled")
                     {
+                        _activeSellOrderIds.Remove(orderId);
+                        _logger.Debug("Removed sell order {OrderId} from active tracking (Status: {Status}) - stop-loss adjustments now allowed", 
+                            orderId, status);
+                    }
+                }
+
+                // Handle stop-loss order tracking - execDetails handles trade logging
+                if (_orderToPositionMap.ContainsKey(orderId))
+                {
+                    _logger.Debug("Stop-Loss order update: {OrderId} Status:{Status} Filled:{Filled}", 
+                        orderId, status, filled);
+
+                    if (status == "Filled" || status == "Cancelled")
+                    {
+                        _orderToPositionMap.Remove(orderId);
+                        
+                        // Clear order references from positions when order is filled/cancelled
                         foreach (var position in _positions.Values)
                         {
                             if (position.StopLossOrderId == orderId)
@@ -1062,6 +1086,13 @@ namespace IBMonitor.Services
                 
                 var sellOrder = CreateSellLimitOrder(actualQuantity, calculatedLimitPrice);
                 var orderDescription = $"Sell Limit: {actualQuantity} shares at ${FormatPrice(calculatedLimitPrice)} (Bid: ${FormatPrice(bidPrice)} - SellOffset: ${FormatPrice(sellOffset)}){limitWarning}";
+
+                // Track this sell order to prevent stop-loss interference during execution
+                lock (_lockObject)
+                {
+                    _activeSellOrderIds.Add(orderId);
+                    _logger.Debug("Added sell order {OrderId} to active tracking for {Symbol}", orderId, _config.Symbol);
+                }
 
                 // Place sell order IMMEDIATELY after stop-loss adjustment
                 _ibService.PlaceOrder(orderId, contract, sellOrder);

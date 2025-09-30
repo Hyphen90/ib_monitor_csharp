@@ -1,0 +1,2 @@
+﻿Symbol;Quantity;Order Type;Price;DateTime Created;Bid Triggerd;Ask Triggered;DateTime Executed;Price Executed;Buy/Sell;Time Difference;Price Difference;DateTime Closed;Price Closed;Resulting Points
+IBG;1000;Market;4.43;2025.09.30 18:59:15.481;4.4;4.43;2025.09.30 18:59:15.522;4.43;Buy;0.041;0;2025.09.30 18:59:34.908;4.39;-0.04

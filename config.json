@@ -10,7 +10,7 @@
   "breakevenoffset": 0.01,
   "positionopenscript": "positiontrigger.ahk",
   "logfile": true,
-  "maxshares": 500,
+  "maxshares": 5000,
   "usebarbasedtrailing": false,
   "bartrailingoffset": 0.05,
   "bartrailinglookback": 2,

@@ -93,7 +93,10 @@ namespace IBMonitor.Services
                     "show" => HandleShowCommand(parts),
                     "help" => ShowHelp(),
                     "exit" => HandleExit(),
-                    _ when command.StartsWith("c") && command.Length > 1 => await HandleConditionalCloseCommand(input.Trim()),
+                    _ when command.StartsWith("c") && command.Length > 1 => 
+                        input.Trim().Contains("%") ? 
+                            await HandlePercentageCloseCommand(input.Trim()) : 
+                            await HandleConditionalCloseCommand(input.Trim()),
                     _ => "Unknown command. Use 'help' for assistance."
                 };
             }
@@ -352,6 +355,61 @@ namespace IBMonitor.Services
             {
                 _logger.Error(ex, "Error executing C0 command");
                 return $"Error executing C0 command: {ex.Message}";
+            }
+        }
+
+        private async Task<string> HandlePercentageCloseCommand(string input)
+        {
+            if (string.IsNullOrEmpty(_config.Symbol))
+                return "No symbol configured. Use 'set symbol <SYMBOL>' first.";
+
+            try
+            {
+                // Parse percentage close command: C50%
+                var percentagePattern = @"^[cC](\d+)%$";
+                var match = Regex.Match(input, percentagePattern);
+                
+                if (!match.Success)
+                    return "Invalid percentage close command format. Use: C<percentage>% (e.g., C50%)";
+
+                var percentageStr = match.Groups[1].Value;
+
+                if (!int.TryParse(percentageStr, out var percentage) || percentage <= 0 || percentage > 100)
+                    return "Invalid percentage. Must be a number between 1 and 100.";
+
+                // Get current position
+                var position = _positionService.GetPosition(_config.Symbol);
+                if (position == null || position.IsFlat)
+                    return $"No open position found for {_config.Symbol}. Cannot close percentage of flat position.";
+
+                if (position.Quantity <= 0)
+                    return $"No long position found for {_config.Symbol}. Current position: {position.Quantity}";
+
+                // Calculate shares to close
+                var percentageToClose = percentage / 100.0;
+                var sharesToClose = (double)position.Quantity * percentageToClose;
+                var roundedShares = (decimal)Math.Round(sharesToClose, MidpointRounding.AwayFromZero);
+
+                // Ensure at least 1 share is closed
+                if (roundedShares < 1)
+                    roundedShares = 1;
+
+                // Ensure we don't exceed available shares
+                if (roundedShares > position.Quantity)
+                    roundedShares = position.Quantity;
+
+                _logger.Information("Percentage close command: {Symbol} {Percentage}% of {TotalShares} = {SharesToClose} shares", 
+                    _config.Symbol, percentage, position.Quantity, roundedShares);
+
+                // Use existing ProcessSellOrder method
+                var result = await _positionService.ProcessSellOrder(roundedShares, null);
+                
+                return $"Closing {percentage}% of position ({roundedShares} of {position.Quantity} shares): {result}";
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error processing percentage close command: {Input}", input);
+                return $"Error processing percentage close command: {ex.Message}";
             }
         }
 
@@ -698,6 +756,7 @@ CLOSE Commands:
   C                                      - Cancel all orders and place sell limit at Bid - SellOffset
   C<price>                               - Set take-profit trigger at target price (e.g. C5.43)
                                            Can be set in flat state (before position is active)
+  C<percentage>%                         - Close percentage of position (e.g. C50% closes half)
   C0                                     - Immediately reset/clear take-profit target
 
 SET Commands:
