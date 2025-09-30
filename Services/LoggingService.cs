@@ -21,7 +21,12 @@ namespace IBMonitor.Services
             // File Logging
             if (config.LogFile)
             {
-                var logFileName = "Log_.log";
+                // Create Logs directory if it doesn't exist
+                var logsDirectory = Path.Combine(Directory.GetCurrentDirectory(), "Logs");
+                Directory.CreateDirectory(logsDirectory);
+                
+                // New filename format: Logs/20250930.log (without Log_ prefix)
+                var logFileName = Path.Combine(logsDirectory, ".log");
                 loggerConfig.WriteTo.File(
                     path: logFileName,
                     outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] {Message:lj}{NewLine}{Exception}",
