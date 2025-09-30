@@ -55,6 +55,10 @@ namespace IBMonitor.Services
                     {
                         return "Buy commands are blocked during close mode. Please wait for all positions to be closed.";
                     }
+                    else if (command.StartsWith("s") && command.Length > 1 && Regex.IsMatch(command, @"^s\d+"))
+                    {
+                        return "Sell commands are blocked during close mode. Please wait for all positions to be closed.";
+                    }
                     else if (command == "set")
                     {
                         return "Set commands are blocked during close mode. Please wait for all positions to be closed.";
@@ -73,6 +77,12 @@ namespace IBMonitor.Services
                 if (command.StartsWith("b") && command.Length > 1)
                 {
                     return await HandleBuyCommand(input.Trim());
+                }
+
+                // Check for sell commands (S100, S100,4.36, etc.)
+                if (command.StartsWith("s") && command.Length > 1 && Regex.IsMatch(command, @"^s\d+"))
+                {
+                    return await HandleSellCommand(input.Trim());
                 }
 
                 return command switch
@@ -427,6 +437,48 @@ namespace IBMonitor.Services
             }
         }
 
+        private async Task<string> HandleSellCommand(string input)
+        {
+            if (string.IsNullOrEmpty(_config.Symbol))
+                return "No symbol configured. Use 'set symbol <SYMBOL>' first.";
+
+            try
+            {
+                // Parse sell command: S100 only (explicit prices disabled for IB safety)
+                var sellPattern = @"^[sS](\d+)$";
+                var match = Regex.Match(input, sellPattern);
+                
+                if (!match.Success)
+                {
+                    // Check if user tried to use explicit price format
+                    if (input.Contains(","))
+                    {
+                        return "Explicit price sell orders are disabled for safety. Use S<quantity> for market-based sells (e.g., S100).";
+                    }
+                    return "Invalid sell command format. Use: S<quantity> (e.g., S100)";
+                }
+
+                var quantityStr = match.Groups[1].Value;
+
+                if (!decimal.TryParse(quantityStr, out var quantity) || quantity <= 0)
+                    return "Invalid quantity. Must be a positive number.";
+
+                // DISABLED: Explicit price functionality removed for IB safety
+                // Risk: If sell limit order is placed above market price (e.g., S250,8.0 when market is 7.0),
+                // the stop-loss gets reduced but if price falls below stop-loss before reaching the limit,
+                // only partial position gets closed, leaving remaining shares unprotected.
+                // Example: 500 shares position, S250,8.0 command reduces stop-loss to 250 shares,
+                // but if price falls to 5.0, only 250 shares get stopped out, 250 shares remain exposed.
+
+                return await _positionService.ProcessSellOrder(quantity, null);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error processing sell command: {Input}", input);
+                return $"Error processing sell command: {ex.Message}";
+            }
+        }
+
         private async Task<string> ProcessBuyOrder(decimal quantity, double? limitPrice = null)
         {
             try
@@ -489,6 +541,8 @@ namespace IBMonitor.Services
             }
         }
 
+
+
         private Contract CreateContract(string symbol)
         {
             return new Contract
@@ -534,6 +588,20 @@ namespace IBMonitor.Services
             return new Order
             {
                 Action = "BUY",
+                OrderType = "LMT",
+                TotalQuantity = quantity,
+                LmtPrice = limitPrice,
+                Tif = "GTC",
+                Transmit = true,
+                OutsideRth = true  // Allow execution outside regular trading hours
+            };
+        }
+
+        private Order CreateSellLimitOrder(decimal quantity, double limitPrice)
+        {
+            return new Order
+            {
+                Action = "SELL",
                 OrderType = "LMT",
                 TotalQuantity = quantity,
                 LmtPrice = limitPrice,
@@ -621,6 +689,10 @@ namespace IBMonitor.Services
 BUY Commands:
   B<quantity>                            - Buy shares at Ask + BuyOffset (e.g. B100)
   B<quantity>,<price>                    - Buy shares at specific limit price (e.g. B100,4.36)
+
+SELL Commands:
+  S<quantity>                            - Sell shares at Bid - SellOffset (e.g. S100)
+                                           Never goes short - limits to available shares
 
 CLOSE Commands:
   C                                      - Cancel all orders and place sell limit at Bid - SellOffset

@@ -989,6 +989,95 @@ namespace IBMonitor.Services
             }
         }
 
+        public async Task<string> ProcessSellOrder(decimal quantity, double? limitPrice = null)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_config.Symbol))
+                    return "No symbol configured for sell order.";
+
+                // Check current position to prevent going short
+                var currentPosition = GetPosition(_config.Symbol);
+                var currentQuantity = currentPosition?.Quantity ?? 0m;
+                
+                if (currentQuantity <= 0)
+                {
+                    return $"Sell order rejected: No long position found for {_config.Symbol}. Current position: {currentQuantity}";
+                }
+                
+                // Limit sell quantity to available shares to prevent going short
+                var actualQuantity = Math.Min(quantity, currentQuantity);
+                var wasLimited = actualQuantity < quantity;
+                
+                // CRITICAL: Adjust stop-loss order FIRST to prevent IB from trying to borrow shares
+                if (currentPosition != null && currentPosition.StopLossOrderId.HasValue)
+                {
+                    var newStopLossQuantity = currentQuantity - actualQuantity;
+                    if (newStopLossQuantity > 0)
+                    {
+                        // Reduce stop-loss order quantity immediately
+                        var tempPosition = new PositionInfo
+                        {
+                            Contract = currentPosition.Contract,
+                            Quantity = newStopLossQuantity,
+                            StopLossOrderId = currentPosition.StopLossOrderId,
+                            StopLossPrice = currentPosition.StopLossPrice,
+                            StopLimitPrice = currentPosition.StopLimitPrice
+                        };
+                        ModifyStopLossOrderQuantity(tempPosition);
+                        _logger.Information("Stop-Loss order quantity reduced BEFORE sell order: {Symbol} OrderId:{OrderId} NewQty:{NewQty}", 
+                            _config.Symbol, currentPosition.StopLossOrderId.Value, newStopLossQuantity);
+                    }
+                    else
+                    {
+                        // Cancel stop-loss order completely if selling entire position
+                        _ibService.CancelOrder(currentPosition.StopLossOrderId.Value);
+                        _orderToPositionMap.Remove(currentPosition.StopLossOrderId.Value);
+                        _logger.Information("Stop-Loss order cancelled BEFORE sell order: {Symbol} OrderId:{OrderId} (selling entire position)", 
+                            _config.Symbol, currentPosition.StopLossOrderId.Value);
+                    }
+                }
+                
+                var contract = CreateContract(_config.Symbol);
+                var orderId = _ibService.GetNextOrderId();
+
+                string limitWarning = "";
+                
+                if (wasLimited)
+                {
+                    limitWarning = $" (Limited from {quantity} to {actualQuantity} shares to prevent short position)";
+                    _logger.Warning("Sell order quantity limited: Requested {RequestedQty}, Available {AvailableQty}, Selling {ActualQty} for {Symbol}", 
+                        quantity, currentQuantity, actualQuantity, _config.Symbol);
+                }
+
+                // Market-based sell order with bid - offset (explicit prices disabled for IB safety)
+                var bidPrice = GetCurrentBidPrice(_config.Symbol);
+                if (bidPrice <= 0)
+                {
+                    return "Unable to get current bid price. Market data may not be available.";
+                }
+
+                var sellOffset = _config.GetSellOffsetValue(bidPrice);
+                var calculatedLimitPrice = RoundPriceForIB(bidPrice - sellOffset);
+                
+                var sellOrder = CreateSellLimitOrder(actualQuantity, calculatedLimitPrice);
+                var orderDescription = $"Sell Limit: {actualQuantity} shares at ${FormatPrice(calculatedLimitPrice)} (Bid: ${FormatPrice(bidPrice)} - SellOffset: ${FormatPrice(sellOffset)}){limitWarning}";
+
+                // Place sell order IMMEDIATELY after stop-loss adjustment
+                _ibService.PlaceOrder(orderId, contract, sellOrder);
+
+                _logger.Information("Sell order placed: {Symbol} OrderId:{OrderId} {Description}", 
+                    _config.Symbol, orderId, orderDescription);
+
+                return $"Sell order placed: {orderDescription} (OrderId: {orderId})";
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error placing sell order");
+                return $"Error placing sell order: {ex.Message}";
+            }
+        }
+
         public bool IsClosing
         {
             get
