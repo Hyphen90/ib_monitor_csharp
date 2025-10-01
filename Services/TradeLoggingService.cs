@@ -102,21 +102,47 @@ namespace IBMonitor.Services
         /// </summary>
         public void RecordBuyOrderExecution(int orderId, string symbol, double avgFillPrice, DateTime? executionTime = null)
         {
+            RecordBuyOrderExecution(orderId, symbol, avgFillPrice, 0m, executionTime); // Use 0 quantity as fallback
+        }
+
+        /// <summary>
+        /// Records BUY order execution details with quantity (trade entry)
+        /// </summary>
+        public void RecordBuyOrderExecution(int orderId, string symbol, double avgFillPrice, decimal quantity, DateTime? executionTime = null)
+        {
             lock (_lockObject)
             {
                 if (_activeTrades.TryGetValue(symbol, out var trade))
                 {
-                    trade.DateTimeExecuted = executionTime ?? DateTime.Now;
-                    trade.PriceExecuted = avgFillPrice;
+                    var execTime = executionTime ?? DateTime.Now;
+                    
+                    // Add this execution to the buy executions list
+                    trade.BuyExecutions.Add(new ExecutionDetails
+                    {
+                        OrderId = orderId,
+                        Quantity = quantity,
+                        Price = avgFillPrice,
+                        ExecutionTime = execTime
+                    });
+                    
+                    // Update average buy price with all executions
+                    trade.UpdateAverageBuyPrice();
+                    
+                    // Set execution timing for the first buy execution
+                    if (!trade.DateTimeExecuted.HasValue)
+                    {
+                        trade.DateTimeExecuted = execTime;
+                        trade.OrderId = orderId;
+                        
+                        // Calculate time and price differences based on average price
+                        trade.CalculateTimeDifference();
+                        trade.CalculatePriceDifference();
+                    }
+                    
                     trade.IsExecuted = true;
-                    trade.OrderId = orderId;
                     
-                    // Calculate time and price differences now that we have execution data
-                    trade.CalculateTimeDifference();
-                    trade.CalculatePriceDifference();
-                    
-                    _logger.Information("BUY order execution recorded for {Symbol}: OrderId={OrderId} ExecutedPrice={ExecutedPrice:F4} TimeDiff={TimeDiff:F3}s PriceDiff={PriceDiff:F4}", 
-                        symbol, orderId, avgFillPrice, trade.TimeDifference ?? 0, trade.PriceDifference ?? 0);
+                    _logger.Information("BUY order execution recorded for {Symbol}: OrderId={OrderId} ExecutedPrice={ExecutedPrice:F4} Qty={Quantity} AvgBuyPrice={AvgPrice:F4} TotalBuyExecs={TotalExecs}", 
+                        symbol, orderId, avgFillPrice, quantity, trade.PriceExecuted ?? 0, trade.BuyExecutions.Count);
                 }
                 else
                 {
@@ -130,28 +156,68 @@ namespace IBMonitor.Services
         /// </summary>
         public void RecordSellOrderExecution(int orderId, string symbol, double avgFillPrice, DateTime? executionTime = null)
         {
+            RecordSellOrderExecution(orderId, symbol, avgFillPrice, 0m, executionTime); // Use 0 quantity as fallback
+        }
+
+        /// <summary>
+        /// Records SELL order execution details with quantity (trade exit)
+        /// </summary>
+        public void RecordSellOrderExecution(int orderId, string symbol, double avgFillPrice, decimal quantity, DateTime? executionTime = null)
+        {
             lock (_lockObject)
             {
                 if (_activeTrades.TryGetValue(symbol, out var trade))
                 {
-                    // Update the close price with the actual sell execution price
-                    trade.PriceClosed = avgFillPrice;
-                    trade.DateTimeClosed = executionTime ?? DateTime.Now;
+                    var execTime = executionTime ?? DateTime.Now;
                     
-                    // Recalculate resulting points with the actual sell price
-                    trade.CalculateResultingPoints();
+                    // Add this execution to the sell executions list
+                    trade.SellExecutions.Add(new ExecutionDetails
+                    {
+                        OrderId = orderId,
+                        Quantity = quantity,
+                        Price = avgFillPrice,
+                        ExecutionTime = execTime
+                    });
                     
-                    _logger.Information("SELL order execution recorded for {Symbol}: OrderId={OrderId} SellPrice={SellPrice:F4} ResultingPoints={ResultingPoints:F4}", 
-                        symbol, orderId, avgFillPrice, trade.ResultingPoints ?? 0);
+                    // Update average sell price with all executions
+                    trade.UpdateAverageSellPrice();
                     
-                    // Now that we have the final SELL execution details, complete the trade
-                    WriteTradeToLog(trade);
+                    // Set close timing for the first sell execution
+                    if (!trade.DateTimeClosed.HasValue)
+                    {
+                        trade.DateTimeClosed = execTime;
+                    }
                     
-                    // Remove from active tracking
-                    _activeTrades.Remove(symbol);
+                    // Calculate total sold quantity to check if position is fully closed
+                    var totalSoldQuantity = trade.SellExecutions.Sum(e => e.Quantity);
+                    var totalBoughtQuantity = trade.BuyExecutions.Sum(e => e.Quantity);
                     
-                    _logger.Information("Trade completed and logged: {Symbol} @ {ClosePrice:F4} = {ResultingPoints:F4} points", 
-                        symbol, avgFillPrice, trade.ResultingPoints ?? 0);
+                    _logger.Information("SELL order execution recorded for {Symbol}: OrderId={OrderId} SellPrice={SellPrice:F4} Qty={Quantity} AvgSellPrice={AvgPrice:F4} TotalSellExecs={TotalExecs} SoldQty={SoldQty}/{BoughtQty}", 
+                        symbol, orderId, avgFillPrice, quantity, trade.PriceClosed ?? 0, trade.SellExecutions.Count, totalSoldQuantity, totalBoughtQuantity);
+                    
+                    // Check if position is fully closed (all bought shares have been sold)
+                    if (totalSoldQuantity >= totalBoughtQuantity && totalBoughtQuantity > 0)
+                    {
+                        // Position is fully closed - complete the trade
+                        trade.CalculateResultingPoints();
+                        
+                        _logger.Information("Position fully closed for {Symbol}: AvgBuyPrice={AvgBuyPrice:F4} AvgSellPrice={AvgSellPrice:F4} ResultingPoints={ResultingPoints:F4}", 
+                            symbol, trade.PriceExecuted ?? 0, trade.PriceClosed ?? 0, trade.ResultingPoints ?? 0);
+                        
+                        // Complete the trade
+                        WriteTradeToLog(trade);
+                        
+                        // Remove from active tracking
+                        _activeTrades.Remove(symbol);
+                        
+                        _logger.Information("Trade completed and logged: {Symbol} @ AvgSellPrice {ClosePrice:F4} = {ResultingPoints:F4} points", 
+                            symbol, trade.PriceClosed ?? 0, trade.ResultingPoints ?? 0);
+                    }
+                    else
+                    {
+                        _logger.Debug("Position partially closed for {Symbol}: {SoldQty}/{BoughtQty} shares sold", 
+                            symbol, totalSoldQuantity, totalBoughtQuantity);
+                    }
                 }
                 else
                 {

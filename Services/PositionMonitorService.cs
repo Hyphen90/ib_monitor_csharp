@@ -491,12 +491,12 @@ namespace IBMonitor.Services
             if (execution.Side.Equals("BOT", StringComparison.OrdinalIgnoreCase))
             {
                 // BUY execution (BOT = Bought)
-                _tradeLoggingService.RecordBuyOrderExecution(execution.OrderId, contract.Symbol, execution.Price, executionTime);
+                _tradeLoggingService.RecordBuyOrderExecution(execution.OrderId, contract.Symbol, execution.Price, execution.Shares, executionTime);
             }
             else if (execution.Side.Equals("SLD", StringComparison.OrdinalIgnoreCase))
             {
                 // SELL execution (SLD = Sold)
-                _tradeLoggingService.RecordSellOrderExecution(execution.OrderId, contract.Symbol, execution.Price, executionTime);
+                _tradeLoggingService.RecordSellOrderExecution(execution.OrderId, contract.Symbol, execution.Price, execution.Shares, executionTime);
             }
             else
             {

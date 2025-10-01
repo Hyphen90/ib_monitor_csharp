@@ -25,6 +25,10 @@ namespace IBMonitor.Models
         public bool IsExecuted { get; set; }
         public bool IsClosed { get; set; }
         
+        // Multiple executions tracking for average price calculation
+        public List<ExecutionDetails> BuyExecutions { get; set; } = new();
+        public List<ExecutionDetails> SellExecutions { get; set; } = new();
+        
         /// <summary>
         /// Calculates the time difference in seconds between order creation and execution
         /// </summary>
@@ -65,6 +69,64 @@ namespace IBMonitor.Models
                     ResultingPoints = PriceExecuted.Value - PriceClosed.Value;
                 }
             }
+        }
+        
+        /// <summary>
+        /// Calculates the weighted average price from a list of executions
+        /// </summary>
+        private double CalculateWeightedAveragePrice(List<ExecutionDetails> executions)
+        {
+            if (executions == null || executions.Count == 0)
+                return 0.0;
+            
+            double totalValue = 0.0;
+            decimal totalQuantity = 0m;
+            
+            foreach (var execution in executions)
+            {
+                totalValue += execution.Price * (double)execution.Quantity;
+                totalQuantity += execution.Quantity;
+            }
+            
+            return totalQuantity > 0 ? totalValue / (double)totalQuantity : 0.0;
+        }
+        
+        /// <summary>
+        /// Updates PriceExecuted with the weighted average of all buy executions
+        /// </summary>
+        public void UpdateAverageBuyPrice()
+        {
+            if (BuyExecutions.Count > 0)
+            {
+                PriceExecuted = CalculateWeightedAveragePrice(BuyExecutions);
+            }
+        }
+        
+        /// <summary>
+        /// Updates PriceClosed with the weighted average of all sell executions
+        /// </summary>
+        public void UpdateAverageSellPrice()
+        {
+            if (SellExecutions.Count > 0)
+            {
+                PriceClosed = CalculateWeightedAveragePrice(SellExecutions);
+            }
+        }
+        
+        /// <summary>
+        /// Gets the total quantity from all buy executions
+        /// </summary>
+        public decimal GetTotalBuyQuantity()
+        {
+            return BuyExecutions.Sum(e => e.Quantity);
+        }
+        
+        /// <summary>
+        /// Gets the total quantity from all sell executions
+        /// </summary>
+        public decimal GetTotalSellQuantity()
+        {
+            return SellExecutions.Sum(e => e.Quantity);
         }
         
         /// <summary>
@@ -128,7 +190,10 @@ namespace IBMonitor.Models
             var priceExec = FormatPrice(PriceExecuted);
             var priceClose = FormatPrice(PriceClosed);
             
-            return $"{Symbol};{Quantity};{OrderType};{FormatPrice(Price)};{dateCreated};{FormatPrice(BidTriggered)};{FormatPrice(AskTriggered)};{dateExecuted};{priceExec};{BuySell};{timeDiff};{priceDiff};{dateClosed};{priceClose};{resultPoints}";
+            // Use total buy quantity from all executions instead of original Quantity
+            var totalQuantity = GetTotalBuyQuantity();
+            
+            return $"{Symbol};{totalQuantity};{OrderType};{FormatPrice(Price)};{dateCreated};{FormatPrice(BidTriggered)};{FormatPrice(AskTriggered)};{dateExecuted};{priceExec};{BuySell};{timeDiff};{priceDiff};{dateClosed};{priceClose};{resultPoints}";
         }
         
         /// <summary>
