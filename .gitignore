@@ -431,3 +431,6 @@ IBClientLocal/
 **/TWS API/**
 IBClient/
 IBSampleApp/
+
+# Trade logs directory
+Log_Trades/
